@@ -13,22 +13,22 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-package com.morpheusdata.micetro
+package com.morpheusdata.morpheusremote
 
 import com.morpheusdata.core.Plugin
 
-class MicetroPlugin extends Plugin {
+class MorpheusRemotePlugin extends Plugin {
 
 	@Override
 	String getCode() {
-		return 'morpheus-micetro-plugin'
+		return 'morpheus-morpheusremote-plugin'
 	}
 
 	@Override
 	void initialize() {
-		MicetroProvider micetroProvider = new MicetroProvider(this, morpheus)
-		this.pluginProviders.put("micetro", micetroProvider)
-		this.setName("Micetro")
+		MorpheusRemoteProvider morpheusRemoteProvider = new MorpheusRemoteProvider(this, morpheus)
+		this.pluginProviders.put("morpheusremote", morpheusRemoteProvider)
+		this.setName("Morpheus Remote")
 	}
 
 	/**

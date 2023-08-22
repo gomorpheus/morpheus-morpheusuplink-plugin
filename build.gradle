@@ -10,7 +10,7 @@ plugins {
 apply plugin: 'com.github.johnrengelman.shadow'
 apply plugin: 'com.bertramlabs.asset-pipeline'
 
-group = 'com.morpheusdata.micetro'
+group = 'com.morpheusdata.morpheusremote'
 sourceCompatibility = '1.11'
 targetCompatibility = '1.11'
 ext.isReleaseVersion = !version.endsWith("SNAPSHOT")
@@ -56,17 +56,17 @@ sourceSets {
 jar {
 	manifest {
 		attributes(
-				'Plugin-Class': 'com.morpheusdata.micetro.MicetroPlugin',
+				'Plugin-Class': 'com.morpheusdata.morpheusremote.MorpheusRemotePlugin',
 				'Plugin-Version': version,
-				'Morpheus-Name': 'Micetro',
+				'Morpheus-Name': 'Morpheus Remote',
 				'Morpheus-Organization': 'morpheus',
-				'Morpheus-Code': 'micetro-plugin',
-				'Morpheus-Description': 'Plugin for Mice and Men IPAM',
-				'Morpheus-Logo': 'assets/micetro.png',
-				'Morpheus-Logo-Dark': 'assets/micetro.png',
+				'Morpheus-Code': 'morpheusremote-plugin',
+				'Morpheus-Description': 'Plugin for Morpheus Remote IPAM',
+				'Morpheus-Logo': 'assets/morpheus.png',
+				'Morpheus-Logo-Dark': 'assets/morpheus-dark.png',
 				'Morpheus-Color': '#ffffff',
 				'Morpheus-Labels': 'Plugin, Networking, Network',
-				'Morpheus-Repo': 'https://github.com/gomorpheus/morpheus-micetro-plugin',
+				'Morpheus-Repo': 'https://github.com/gomorpheus/morpheus-morpheus-plugin',
 				'Morpheus-Min-Appliance-Version': minversion
 		)
 	}

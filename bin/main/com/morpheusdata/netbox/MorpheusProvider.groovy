@@ -1,4 +1,4 @@
-package com.morpheusdata.micetro
+package com.morpheusdata.morpheus
 
 import com.morpheusdata.core.util.HttpApiClient
 import com.morpheusdata.core.util.NetworkUtility
@@ -36,15 +36,17 @@ import io.reactivex.Observable
 import org.apache.commons.validator.routines.InetAddressValidator
 
 @Slf4j
-class MicetroProvider implements IPAMProvider, DNSProvider {
+class MorpheusProvider implements IPAMProvider, DNSProvider {
 	MorpheusContext morpheusContext
 	Plugin plugin
-    static String platformUrl = 'mmws/api/v2/'
+    static String authPath = 'oauth/token/'
+    static String networkPoolsPath = 'api/networks/pools/'
+    static String networkDomainsPath = 'api/networks/domains/'
 
-	static String LOCK_NAME = 'micetro.ipam'
+	static String LOCK_NAME = 'morpheus.ipam'
 	private java.lang.Object maxResults
 
-	MicetroProvider(Plugin plugin, MorpheusContext morpheusContext) {
+	MorpheusProvider(Plugin plugin, MorpheusContext morpheusContext) {
 		this.morpheusContext = morpheusContext
 		this.plugin = plugin
 	}
@@ -75,7 +77,7 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
 	 */
 	@Override
 	String getCode() {
-		return 'micetro'
+		return 'morpheus'
 	}
 
 	/**
@@ -86,7 +88,7 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
 	 */
 	@Override
 	String getName() {
-		return 'Micetro'
+		return 'Morpheus'
 	}
 
 	/**
@@ -106,7 +108,7 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
             rtn.errors['name'] = 'name is required'
         }
 		if(!poolServer.serviceUrl || poolServer.serviceUrl == ''){
-			rtn.errors['serviceUrl'] = 'Micetro API URL is required'
+			rtn.errors['serviceUrl'] = 'Morpheus URL is required'
 		}
 		if((!poolServer.serviceUsername || poolServer.serviceUsername == '') && (!poolServer.credentialData?.username || poolServer.credentialData?.username == '')){
 			rtn.errors['serviceUsername'] = 'username is required'
@@ -121,7 +123,7 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
 			return rtn //
 		}
         def rpcConfig = getRpcConfig(poolServer)
-		HttpApiClient micetroClient = new HttpApiClient()
+		HttpApiClient morpheusClient = new HttpApiClient()
 		try {
 			def apiUrl = cleanServiceUrl(poolServer.serviceUrl)
 			boolean hostOnline = false
@@ -136,19 +138,19 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
 			if(hostOnline) {
 				opts.doPaging = false
 				opts.maxResults = 1
-                def networkList = listNetworks(micetroClient,poolServer, opts)
+                def networkList = listNetworks(morpheusClient,poolServer, opts)
                     if(networkList.success) {
                         rtn.success = true
                     } else {
-                        rtn.msg = networkList.msg ?: 'Error connecting to Micetro'
+                        rtn.msg = networkList.msg ?: 'Error connecting to Morpheus'
                     }
             } else {
-                rtn.msg = 'Micetro Host Not Reachable'
+                rtn.msg = 'Morpheus Host Not Reachable'
             }
 		} catch(e) {
 			log.error("verifyPoolServer error: ${e}", e)
 		} finally {
-			micetroClient.shutdownClient()
+			morpheusClient.shutdownClient()
 		}
 		return rtn
 	}
@@ -183,10 +185,11 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
 
 	protected ServiceResponse refreshNetworkPoolServer(NetworkPoolServer poolServer, Map opts) {
 		def rtn = new ServiceResponse()
+        def tokenResults
         def rpcConfig = getRpcConfig(poolServer)
 		log.debug("refreshNetworkPoolServer: {}", poolServer.dump())
-		HttpApiClient micetroClient = new HttpApiClient()
-		micetroClient.throttleRate = poolServer.serviceThrottleRate
+		HttpApiClient morpheusClient = new HttpApiClient()
+		morpheusClient.throttleRate = poolServer.serviceThrottleRate
 		try {
 			def apiUrl = cleanServiceUrl(poolServer.serviceUrl)
 			def apiUrlObj = new URL(apiUrl)
@@ -199,46 +202,54 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
 			def testResults
 			// Promise
 			if(hostOnline) {
-                testResults = testNetworkPoolServer(micetroClient,poolServer) as ServiceResponse<Map>
-                if(!testResults.success) {
-                    morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'error calling Micetro').blockingGet()
+                tokenResults = login(netboxClient,rpcConfig)
+                if(tokenResults.success) {
+                testResults = testNetworkPoolServer(morpheusClient,token,poolServer) as ServiceResponse<Map>
+                    if(!testResults.success) {
+                        morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'error calling Micetro').blockingGet()
+                    } else {
+                        morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.syncing).blockingGet()
+                    }
                 } else {
-                    morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.syncing).blockingGet()
+                    morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'Morpheus api not reachable')
+                    return ServiceResponse.error("Morpheus api not reachable")
                 }
             } else {
                 morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'Micetro api not reachable')
+                return ServiceResponse.error("Morpheus api not reachable")
             }
 			Date now = new Date()
-
-            cacheNetworks(micetroClient,poolServer)
-            cacheZones(micetroClient,poolServer, opts)
-            if(poolServer?.configMap?.inventoryExisting) {
-                cacheIpAddressRecords(micetroClient,poolServer, opts)
-                cacheZoneRecords(micetroClient,poolServer, opts)
+            if(testResults?.success) {
+                String token = tokenResults?.token as String
+                cacheNetworks(morpheusClient,token,poolServer,opts)
+                cacheZones(morpheusClient,token,poolServer,opts)
+                if(poolServer?.configMap?.inventoryExisting) {
+                    cacheIpAddressRecords(morpheusClient,token,poolServer,opts)
+                    cacheZoneRecords(morpheusClient,token,poolServer,opts)
+                }
+                log.info("Sync Completed in ${new Date().time - now.time}ms")
+                morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.ok).subscribe().dispose()
             }
-            log.info("Sync Completed in ${new Date().time - now.time}ms")
-            morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.ok).subscribe().dispose()
-
 			return testResults
 		} catch(e) {
 			log.error("refreshNetworkPoolServer error: ${e}", e)
 		} finally {
-			micetroClient.shutdownClient()
+			morpheusClient.shutdownClient()
 		}
 		return rtn
 	}
 
 	// cacheNetworks methods
-	void cacheNetworks(HttpApiClient client, NetworkPoolServer poolServer, Map opts = [:]) {
+	void cacheNetworks(HttpApiClient client, String token, NetworkPoolServer poolServer, Map opts = [:]) {
 		opts.doPaging = true
-		def listResults = listNetworks(client, poolServer, opts)
+		def listResults = listNetworks(client, token, poolServer, opts)
 
 		if(listResults.success) {
 			List apiItems = listResults.data as List<Map>
 			Observable<NetworkPoolIdentityProjection> poolRecords = morpheus.network.pool.listIdentityProjections(poolServer.id)
 			SyncTask<NetworkPoolIdentityProjection,Map,NetworkPool> syncTask = new SyncTask(poolRecords, apiItems as Collection<Map>)
 			syncTask.addMatchFunction { NetworkPoolIdentityProjection domainObject, Map apiItem ->
-				domainObject.externalId == "${apiItem?.ref?.tokenize('/')[1]}"
+				domainObject.externalId == "${apiItem.id}"
 			}.onDelete {removeItems ->
 				morpheus.network.pool.remove(poolServer.id, removeItems).blockingGet()
 			}.onAdd { itemsToAdd ->
@@ -261,44 +272,41 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
         HttpApiClient client = new HttpApiClient();
         def rpcConfig = getRpcConfig(poolServer)
         HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-		def poolType = new NetworkPoolType(code: 'micetro')
-		def poolTypeIpv6 = new NetworkPoolType(code: 'micetroipv6')
+		def poolType = new NetworkPoolType(code: 'morpheussync')
+		def poolTypeIpv6 = new NetworkPoolType(code: 'morpheussyncipv6')
 		List<NetworkPool> missingPoolsList = []
 		chunkedAddList?.each { Map it ->
-            def isPool = it.utilizationPercentage
-            if ((it?.utilizationPercentage >= 0) || (!it.isContainer && it.name.contains(':'))) {
-                def id = it?.ref?.tokenize('/')[1]
+            if (it.poolEnabled) {
+                def id = it.id
                 def newNetworkPool
-                def name = it.customProperties.Title ?: it.name
+                def name = it.name
                 def cidr = it.name
+                def poolType = it.type.code
                 def startAddress = it.from
                 def endAddress = it.to
                 def rangeConfig
                 def addRange
 
-                if(!startAddress.contains(':')) {
-                    def networkInfo = getNetworkPoolConfig(cidr)
-
+                if(!it.type.code.contains('ipv6')) {
                     def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${id}",
-                                    cidr: cidr, type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id]
-                    addConfig += networkInfo.config
+                                    type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id]
                     newNetworkPool = new NetworkPool(addConfig)
                     newNetworkPool.ipRanges = []
-                    networkInfo.ranges?.each { range ->
-                        rangeConfig = [startAddress:range.startAddress, endAddress:range.endAddress, addressCount:addConfig.ipCount]
+                    it.ipRanges?.each { range ->
+                        rangeConfig = [cidr:range.cidr, startAddress:range.startAddress, endAddress:range.endAddress, addressCount:addConfig.ipCount]
                         addRange = new NetworkPoolRange(rangeConfig)
                         newNetworkPool.ipRanges.add(addRange)
                     }
-                }
-
-                if(startAddress.contains(':')) {
+                } else {
                     def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${id}",
                                     cidr: cidr, type: poolTypeIpv6, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id]
                     newNetworkPool = new NetworkPool(addConfig)
                     newNetworkPool.ipRanges = []
-                    rangeConfig = [cidrIPv6: cidr, startIPv6Address: startAddress, endIPv6Address: endAddress]
-                    addRange = new NetworkPoolRange(rangeConfig)
-                    newNetworkPool.ipRanges.add(addRange)
+                    it.ipRanges?.each { range ->
+                        rangeConfig = [cidr:range.cidr, startAddress:range.startAddress, endAddress:range.endAddress, addressCount:addConfig.ipCount]
+                        addRange = new NetworkPoolRange(rangeConfig)
+                        newNetworkPool.ipRanges.add(addRange)
+                    }
                 }
                 missingPoolsList.add(newNetworkPool)
             }
@@ -352,7 +360,7 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
 
 				SyncTask<NetworkDomainIdentityProjection,Map,NetworkDomain> syncTask = new SyncTask(domainRecords, apiItems as Collection<Map>)
 				syncTask.addMatchFunction { NetworkDomainIdentityProjection domainObject, Map apiItem ->
-					domainObject.externalId == "${apiItem.ref.tokenize('/')[1]}"
+					domainObject.externalId == "${apiItem.id}"
 				}.addMatchFunction { NetworkDomainIdentityProjection domainObject, Map apiItem ->
 					domainObject.name == apiItem.name
 				}.onDelete {removeItems ->
@@ -380,7 +388,7 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
         try {
             def rpcConfig = getRpcConfig(poolServer)
             def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
-            def apiPath = getServicePath(rpcConfig.serviceUrl) + platformUrl + 'dnsZones'
+            def apiPath = getServicePath(rpcConfig.serviceUrl) + networkDomainsPath
             def hasMore = true
             def attempt = 0
             def doPaging = opts.doPaging != null ? opts.doPaging : true
@@ -394,14 +402,14 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
                 while(hasMore && attempt < 1000) {
                     attempt++
                     HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-                    requestOptions.queryParams = [limit:maxResults.toString(),offset:start.toString()]
+                    requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                     def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
 
                     if(results?.success && results?.error != true) {
                         rtn.success = true
-                        if(results.data?.result?.dnsZones?.size() > 0) {
-                            rtn.data += results.data.result.dnsZones
+                        if(results.data?.networkDomains?.size() > 0) {
+                            rtn.data += results.data.networkDomains
 
                             if(doPaging == true) {
                                 start += maxResults
@@ -423,14 +431,14 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
                 }
             } else {
                 HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-                requestOptions.queryParams = [limit:maxResults.toString(),offset:start.toString()]
+                requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                 def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
 
                 if(results?.success && results?.error != true) {
                     rtn.success = true
-                    if(results.data?.result?.dnsZones?.size() > 0) {
-                        rtn.data = results.data.result.dnsZones
+                    if(results.data?.networkDomains?.size() > 0) {
+                        rtn.data = results.data.networkDomains
                     }
                 } else {
                     if(!rtn.success) {
@@ -449,11 +457,11 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
     void addMissingZones(NetworkPoolServer poolServer, Collection addList) {
 		List<NetworkDomain> missingZonesList = addList?.collect { Map add ->
 			NetworkDomain networkDomain = new NetworkDomain()
-			networkDomain.externalId = add.ref.tokenize('/')[1]
+			networkDomain.externalId = add.id
 			networkDomain.name = NetworkUtility.getFriendlyDomainName(add.name as String)
-			networkDomain.fqdn = NetworkUtility.getFqdnDomainName(add.name as String)
+			networkDomain.fqdn = NetworkUtility.getFqdnDomainName(add.fqdn as String)
 			networkDomain.refSource = 'integration'
-			networkDomain.zoneType = add.type
+			networkDomain.zoneType = add.zoneType
 			return networkDomain
 		}
 		log.info("Adding Missing Zone Records! ${missingZonesList}")
@@ -467,11 +475,11 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
 			if(existingItem) {
 				Boolean save = false
 				if(!existingItem.externalId) {
-					existingItem.externalId = update.masterItem.ref.tokenize('/')[1]
+					existingItem.externalId = update.masterItem.id
 					save = true
 				}
 				if(!existingItem.refId) {
-					existingItem.refType = update.masterItem.type
+					existingItem.refType = update.masterItem.zoneType
 					existingItem.refId = poolServer.integration.id
 					existingItem.refSource = 'integration'
 					save = true
@@ -608,7 +616,7 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
                 while(hasMore && attempt < 1000) {
                     attempt++
                     HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-                    requestOptions.queryParams = ["filter":"type=${recordType}",limit:maxResults.toString(),offset:start.toString()]
+                    requestOptions.queryParams = ["filter":"type=${recordType}",max:maxResults.toString(),offset:start.toString()]
 
                     def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
 
@@ -638,7 +646,7 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
                 
             } else {
                 HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-                requestOptions.queryParams = [limit:maxResults.toString(),offset:start.toString()]
+                requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                 def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
 
@@ -911,7 +919,7 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
         try {
             def rpcConfig = getRpcConfig(poolServer)
             def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
-            def apiPath = getServicePath(rpcConfig.serviceUrl) + platformUrl + 'ranges'
+            def apiPath = getServicePath(rpcConfig.serviceUrl) + networkPoolsPath
             def hasMore = true
             def attempt = 0
             def doPaging = opts.doPaging != null ? opts.doPaging : true
@@ -925,14 +933,14 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
                 while(hasMore && attempt < 1000) {
                     attempt++
                     HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-                    requestOptions.queryParams = [limit:maxResults.toString(),offset:start.toString()]
+                    requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                     def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
 
                     if(results?.success && results?.error != true) {
                         rtn.success = true
-                        if(results.data?.result?.ranges?.size() > 0) {
-                            rtn.data += results.data.result.ranges
+                        if(results?.data?.networkPools?.size() > 0) {
+                            rtn.data += results.data.networkPools
 
                             if(doPaging == true) {
                                 start += maxResults
@@ -954,14 +962,14 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
                 }
             } else {
                 HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-                requestOptions.queryParams = [limit:maxResults.toString(),offset:start.toString()]
+                requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                 def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
 
                 if(results?.success && results?.error != true) {
                     rtn.success = true
-                    if(results.data?.result?.ranges?.size() > 0) {
-                        rtn.data = results.data.result.ranges
+                    if(results?.data?.networkPools?.size() > 0) {
+                        rtn.data = results.data.networkPools
                     }
                 } else {
                     if(!rtn.success) {
@@ -1095,7 +1103,7 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
                 while(hasMore && attempt < 1000) {
                     attempt++
                     HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-                    requestOptions.queryParams = ['filter':'state!=Free',limit:maxResults.toString(),offset:start.toString()]
+                    requestOptions.queryParams = ['filter':'state!=Free',max:maxResults.toString(),offset:start.toString()]
 
                     def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
 
@@ -1124,7 +1132,7 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
                 }
             } else {
                 HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-                requestOptions.queryParams = [limit:maxResults.toString(),offset:start.toString()]
+                requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                 def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
 
@@ -1148,7 +1156,7 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
 	}
 
 
-	ServiceResponse testNetworkPoolServer(HttpApiClient client, NetworkPoolServer poolServer) {
+	ServiceResponse testNetworkPoolServer(HttpApiClient client, String token, NetworkPoolServer poolServer) {
 		def rtn = new ServiceResponse()
 		try {
 			def opts = [doPaging:false, maxResults:1]
@@ -1194,23 +1202,58 @@ class MicetroProvider implements IPAMProvider, DNSProvider {
 	@Override
 	List<OptionType> getIntegrationOptionTypes() {
 		return [
-				new OptionType(code: 'micetro.serviceUrl', name: 'Service URL', inputType: OptionType.InputType.TEXT, fieldName: 'serviceUrl', fieldLabel: 'API Url', fieldContext: 'domain', placeHolder: 'https://x.x.x.x/', displayOrder: 0, required:true),
-				new OptionType(code: 'micetro.credentials', name: 'Credentials', inputType: OptionType.InputType.CREDENTIAL, fieldName: 'type', fieldLabel: 'Credentials', fieldContext: 'credential', required: true, displayOrder: 1, defaultValue: 'local',optionSource: 'credentials',config: '{"credentialTypes":["username-password"]}'),
+				new OptionType(code: 'morpheus.serviceUrl', name: 'Service URL', inputType: OptionType.InputType.TEXT, fieldName: 'serviceUrl', fieldLabel: 'API Url', fieldContext: 'domain', placeHolder: 'https://x.x.x.x/', displayOrder: 0, required:true),
+				new OptionType(code: 'morpheus.credentials', name: 'Credentials', inputType: OptionType.InputType.CREDENTIAL, fieldName: 'type', fieldLabel: 'Credentials', fieldContext: 'credential', required: true, displayOrder: 1, defaultValue: 'local',optionSource: 'credentials',config: '{"credentialTypes":["username-password"]}'),
 
-				new OptionType(code: 'micetro.serviceUsername', name: 'Service Username', inputType: OptionType.InputType.TEXT, fieldName: 'serviceUsername', fieldLabel: 'Username', fieldContext: 'domain', displayOrder: 2,localCredential: true, required: true),
-				new OptionType(code: 'micetro.servicePassword', name: 'Service Password', inputType: OptionType.InputType.PASSWORD, fieldName: 'servicePassword', fieldLabel: 'Password', fieldContext: 'domain', displayOrder: 3,localCredential: true, required: true),
-				new OptionType(code: 'micetro.throttleRate', name: 'Throttle Rate', inputType: OptionType.InputType.NUMBER, defaultValue: 0, fieldName: 'serviceThrottleRate', fieldLabel: 'Throttle Rate', fieldContext: 'domain', displayOrder: 4),
-				new OptionType(code: 'micetro.ignoreSsl', name: 'Ignore SSL', inputType: OptionType.InputType.CHECKBOX, defaultValue: 0, fieldName: 'ignoreSsl', fieldLabel: 'Disable SSL SNI Verification', fieldContext: 'domain', displayOrder: 5),
-				new OptionType(code: 'micetro.inventoryExisting', name: 'Inventory Existing', inputType: OptionType.InputType.CHECKBOX, defaultValue: 0, fieldName: 'inventoryExisting', fieldLabel: 'Inventory Existing', fieldContext: 'config', displayOrder: 6),
-                new OptionType(code: 'micetro.nameProperty', name: 'Name Property', inputType: OptionType.InputType.TEXT, fieldName: 'nameProperty', fieldLabel: 'Name Property', fieldContext: 'config', helpBlock: "Supply the Custom Property [Key] that will Store Hostname [Value]", placeHolder: "serverName", displayOrder: 7, required: true)
-
+				new OptionType(code: 'morpheus.serviceUsername', name: 'Service Username', inputType: OptionType.InputType.TEXT, fieldName: 'serviceUsername', fieldLabel: 'Username', fieldContext: 'domain', displayOrder: 2,localCredential: true, required: true),
+				new OptionType(code: 'morpheus.servicePassword', name: 'Service Password', inputType: OptionType.InputType.PASSWORD, fieldName: 'servicePassword', fieldLabel: 'Password', fieldContext: 'domain', displayOrder: 3,localCredential: true, required: true),
+				new OptionType(code: 'morpheus.throttleRate', name: 'Throttle Rate', inputType: OptionType.InputType.NUMBER, defaultValue: 0, fieldName: 'serviceThrottleRate', fieldLabel: 'Throttle Rate', fieldContext: 'domain', displayOrder: 4),
+				new OptionType(code: 'morpheus.ignoreSsl', name: 'Ignore SSL', inputType: OptionType.InputType.CHECKBOX, defaultValue: 0, fieldName: 'ignoreSsl', fieldLabel: 'Disable SSL SNI Verification', fieldContext: 'domain', displayOrder: 5),
+				new OptionType(code: 'morpheus.inventoryExisting', name: 'Inventory Existing', inputType: OptionType.InputType.CHECKBOX, defaultValue: 0, fieldName: 'inventoryExisting', fieldLabel: 'Inventory Existing', fieldContext: 'config', displayOrder: 6)
 		]
 	}
 
 	@Override
 	Icon getIcon() {
-		return new Icon(path:"micetro.png", darkPath: "micetro.png")
+		return new Icon(path:"morpheus.png", darkPath: "morpheus-dark.png")
 	}
+
+    def login(HttpApiClient client, rpcConfig) {
+        def rtn = [success:false]
+        try {
+            HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
+            requestOptions.headers = ['content-type':'application/x-www-form-urlencoded',client_id:'morph-automation',grant_type:'password',scope:'write',accept:application/json,]
+            requestOptions.body = JsonOutput.toJson([username:rpcConfig.username, password:rpcConfig.password])
+
+            def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
+            def apiPath = getServicePath(rpcConfig.serviceUrl) + authPath
+
+            def results = client.callJsonApi(apiUrl,apiPath,requestOptions,'POST')
+            if(results?.success && results?.error != true) {
+                log.debug("login: ${results}")
+                rtn.token = results.data?.key?.trim()
+                rtn.success = true
+            } else {
+                return ServiceResponse.error("Get Token Error")
+            }
+        } catch(e) {
+            log.error("Get Token Error: ${e}", e)
+            return ServiceResponse.error("Failed to authenticate to Morpheus")
+        }
+        return rtn
+    }
+
+    void logout(HttpApiClient client, rpcConfig, String token) {
+        try {
+            def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
+            def apiPath = getServicePath(rpcConfig.serviceUrl) + 'logout'
+            HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
+            requestOptions.headers = [Authorization: "Bearer ${token}".toString()]
+            client.callJsonApi(apiUrl,apiPath,requestOptions,"GET")
+        } catch(e) {
+            log.error("logout error: ${e}", e)
+        }
+    }
 
     private getRpcConfig(NetworkPoolServer poolServer) {
         return [
