@@ -39,7 +39,7 @@ import org.apache.commons.validator.routines.InetAddressValidator
 class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 	MorpheusContext morpheusContext
 	Plugin plugin
-    static String authPath = 'oauth/token/'
+    static String authPath = 'oauth/token'
     static String networkPoolsPath = 'api/networks/pools/'
     static String networkDomainsPath = 'api/networks/domains/'
 
@@ -209,7 +209,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 			def testResults
 			// Promise
 			if(hostOnline) {
-                tokenResults = login(netboxClient,rpcConfig)
+                tokenResults = login(morpheusRemoteClient,rpcConfig)
                 if(tokenResults.success) {
                 testResults = testNetworkPoolServer(morpheusRemoteClient,token,poolServer) as ServiceResponse<Map>
                     if(!testResults.success) {
@@ -1229,8 +1229,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
         def rtn = [success:false]
         try {
             HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-            requestOptions.headers = ['content-type':'application/x-www-form-urlencoded',client_id:'morph-automation',grant_type:'password',scope:'write',accept:'application/json',]
-            requestOptions.body = JsonOutput.toJson([username:rpcConfig.username, password:rpcConfig.password])
+            requestOptions.headers = ['content-type':'application/x-www-form-urlencoded','client_id':'morph-automation','grant_type':'password','scope':'write','accept':'application/json',username:${URLEncoder.encode(rpcConfig.username, "UTF-8")},password:${URLEncoder.encode(rpcConfig.password, "UTF-8")}]
 
             def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
             def apiPath = getServicePath(rpcConfig.serviceUrl) + authPath
@@ -1238,7 +1237,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
             def results = client.callJsonApi(apiUrl,apiPath,requestOptions,'POST')
             if(results?.success && results?.error != true) {
                 log.debug("login: ${results}")
-                rtn.token = results.data?.key?.trim()
+                rtn.token = results.data?.access_token?.trim()
                 rtn.success = true
             } else {
                 return ServiceResponse.error("Get Token Error")
@@ -1267,7 +1266,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
             username:poolServer.credentialData?.username ?: poolServer.serviceUsername,
             password:poolServer.credentialData?.password ?: poolServer.servicePassword,
             serviceUrl:poolServer.serviceUrl,
-            ignoreSSL: poolServer.ignoreSsl
+            ignoreSSL:poolServer.ignoreSsl
         ]
     }
 
