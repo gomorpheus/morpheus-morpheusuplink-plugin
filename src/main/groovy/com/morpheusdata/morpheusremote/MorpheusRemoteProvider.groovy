@@ -1238,7 +1238,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
             requestOptions.queryParams = ['client_id':'morph-automation','grant_type':'password','scope':'write']
             requestOptions.headers = ['content-type':'application/x-www-form-urlencoded','accept':'application/json']
 
-            requestOptions.body = "'username=${username}&password=${password}'"
+            requestOptions.body = "username=${username}&password=${password}"
 
             def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
             def apiPath = getServicePath(rpcConfig.serviceUrl) + authPath
