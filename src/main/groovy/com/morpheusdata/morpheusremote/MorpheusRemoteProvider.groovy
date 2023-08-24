@@ -1229,7 +1229,16 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
         def rtn = [success:false]
         try {
             HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-            requestOptions.headers = ['content-type':'application/x-www-form-urlencoded','client_id':'morph-automation','grant_type':'password','scope':'write','accept':'application/json',username:${URLEncoder.encode(rpcConfig.username, "UTF-8")},password:${URLEncoder.encode(rpcConfig.password, "UTF-8")}]
+            // def username = URLEncoder.encode(rpcConfig.username, "UTF-8")
+            // def password = URLEncoder.encode(rpcConfig.password, "UTF-8")
+
+            def username = rpcConfig.username.toString()
+            def password = rpcConfig.password.toString()
+
+            requestOptions.queryParams = ['client_id':'morph-automation','grant_type':'password','scope':'write']
+            requestOptions.headers = ['content-type':'application/x-www-form-urlencoded','accept':'application/json']
+
+            requestOptions.body = "'username=${username}&password=${password}'"
 
             def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
             def apiPath = getServicePath(rpcConfig.serviceUrl) + authPath

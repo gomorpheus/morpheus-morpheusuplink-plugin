@@ -1,4 +1,4 @@
-package com.morpheusdata.morpheus
+package com.morpheusdata.morpheusremote
 
 import com.morpheusdata.core.util.HttpApiClient
 import com.morpheusdata.core.util.NetworkUtility
@@ -36,17 +36,17 @@ import io.reactivex.Observable
 import org.apache.commons.validator.routines.InetAddressValidator
 
 @Slf4j
-class MorpheusProvider implements IPAMProvider, DNSProvider {
+class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 	MorpheusContext morpheusContext
 	Plugin plugin
-    static String authPath = 'oauth/token/'
+    static String authPath = 'oauth/token'
     static String networkPoolsPath = 'api/networks/pools/'
     static String networkDomainsPath = 'api/networks/domains/'
 
-	static String LOCK_NAME = 'morpheus.ipam'
+	static String LOCK_NAME = 'morpheusremote.ipam'
 	private java.lang.Object maxResults
 
-	MorpheusProvider(Plugin plugin, MorpheusContext morpheusContext) {
+	MorpheusRemoteProvider(Plugin plugin, MorpheusContext morpheusContext) {
 		this.morpheusContext = morpheusContext
 		this.plugin = plugin
 	}
@@ -77,7 +77,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
 	 */
 	@Override
 	String getCode() {
-		return 'morpheus'
+		return 'morpheusremote'
 	}
 
 	/**
@@ -88,7 +88,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
 	 */
 	@Override
 	String getName() {
-		return 'Morpheus'
+		return 'Morpheus Remote'
 	}
 
 	/**
@@ -123,7 +123,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
 			return rtn //
 		}
         def rpcConfig = getRpcConfig(poolServer)
-		HttpApiClient morpheusClient = new HttpApiClient()
+		HttpApiClient morpheusRemoteClient = new HttpApiClient()
 		try {
 			def apiUrl = cleanServiceUrl(poolServer.serviceUrl)
 			boolean hostOnline = false
@@ -138,19 +138,26 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
 			if(hostOnline) {
 				opts.doPaging = false
 				opts.maxResults = 1
-                def networkList = listNetworks(morpheusClient,poolServer, opts)
+                def tokenResults = login(morpheusRemoteClient,rpcConfig)
+                def networkList
+                if(tokenResults.success) {
+                    def token = tokenResults.token.toString()
+                    networkList = listNetworks(morpheusRemoteClient,token,poolServer,opts)
                     if(networkList.success) {
                         rtn.success = true
                     } else {
                         rtn.msg = networkList.msg ?: 'Error connecting to Morpheus'
                     }
+                } else {
+                    rtn.msg = tokenResults.msg ?: 'Error connecting to Morpheus'
+                }
             } else {
                 rtn.msg = 'Morpheus Host Not Reachable'
             }
 		} catch(e) {
 			log.error("verifyPoolServer error: ${e}", e)
 		} finally {
-			morpheusClient.shutdownClient()
+			morpheusRemoteClient.shutdownClient()
 		}
 		return rtn
 	}
@@ -188,8 +195,8 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
         def tokenResults
         def rpcConfig = getRpcConfig(poolServer)
 		log.debug("refreshNetworkPoolServer: {}", poolServer.dump())
-		HttpApiClient morpheusClient = new HttpApiClient()
-		morpheusClient.throttleRate = poolServer.serviceThrottleRate
+		HttpApiClient morpheusRemoteClient = new HttpApiClient()
+		morpheusRemoteClient.throttleRate = poolServer.serviceThrottleRate
 		try {
 			def apiUrl = cleanServiceUrl(poolServer.serviceUrl)
 			def apiUrlObj = new URL(apiUrl)
@@ -202,9 +209,9 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
 			def testResults
 			// Promise
 			if(hostOnline) {
-                tokenResults = login(netboxClient,rpcConfig)
+                tokenResults = login(morpheusRemoteClient,rpcConfig)
                 if(tokenResults.success) {
-                testResults = testNetworkPoolServer(morpheusClient,token,poolServer) as ServiceResponse<Map>
+                testResults = testNetworkPoolServer(morpheusRemoteClient,token,poolServer) as ServiceResponse<Map>
                     if(!testResults.success) {
                         morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'error calling Micetro').blockingGet()
                     } else {
@@ -221,11 +228,11 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
 			Date now = new Date()
             if(testResults?.success) {
                 String token = tokenResults?.token as String
-                cacheNetworks(morpheusClient,token,poolServer,opts)
-                cacheZones(morpheusClient,token,poolServer,opts)
+                cacheNetworks(morpheusRemoteClient,token,poolServer,opts)
+                cacheZones(morpheusRemoteClient,token,poolServer,opts)
                 if(poolServer?.configMap?.inventoryExisting) {
-                    cacheIpAddressRecords(morpheusClient,token,poolServer,opts)
-                    cacheZoneRecords(morpheusClient,token,poolServer,opts)
+                    cacheIpAddressRecords(morpheusRemoteClient,token,poolServer,opts)
+                    cacheZoneRecords(morpheusRemoteClient,token,poolServer,opts)
                 }
                 log.info("Sync Completed in ${new Date().time - now.time}ms")
                 morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.ok).subscribe().dispose()
@@ -234,7 +241,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
 		} catch(e) {
 			log.error("refreshNetworkPoolServer error: ${e}", e)
 		} finally {
-			morpheusClient.shutdownClient()
+			morpheusRemoteClient.shutdownClient()
 		}
 		return rtn
 	}
@@ -244,7 +251,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
 		opts.doPaging = true
 		def listResults = listNetworks(client, token, poolServer, opts)
 
-		if(listResults.success) {
+		if(listResults.success && !listResults.error && listResults.data) {
 			List apiItems = listResults.data as List<Map>
 			Observable<NetworkPoolIdentityProjection> poolRecords = morpheus.network.pool.listIdentityProjections(poolServer.id)
 			SyncTask<NetworkPoolIdentityProjection,Map,NetworkPool> syncTask = new SyncTask(poolRecords, apiItems as Collection<Map>)
@@ -272,8 +279,8 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
         HttpApiClient client = new HttpApiClient();
         def rpcConfig = getRpcConfig(poolServer)
         HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-		def poolType = new NetworkPoolType(code: 'morpheussync')
-		def poolTypeIpv6 = new NetworkPoolType(code: 'morpheussyncipv6')
+		def poolType = new NetworkPoolType(code: 'morpheusremote')
+		def poolTypeIpv6 = new NetworkPoolType(code: 'morpheusremoteipv6')
 		List<NetworkPool> missingPoolsList = []
 		chunkedAddList?.each { Map it ->
             if (it.poolEnabled) {
@@ -281,7 +288,6 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
                 def newNetworkPool
                 def name = it.name
                 def cidr = it.name
-                def poolType = it.type.code
                 def startAddress = it.from
                 def endAddress = it.to
                 def rangeConfig
@@ -404,7 +410,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
                     HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
                     requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
-                    def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
+                    def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                     if(results?.success && results?.error != true) {
                         rtn.success = true
@@ -433,7 +439,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
                 HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
                 requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
-                def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
+                def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                 if(results?.success && results?.error != true) {
                     rtn.success = true
@@ -618,7 +624,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
                     HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
                     requestOptions.queryParams = ["filter":"type=${recordType}",max:maxResults.toString(),offset:start.toString()]
 
-                    def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
+                    def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                     if(results?.success && results?.error != true) {
                         rtn.success = true
@@ -648,7 +654,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
                 HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
                 requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
-                def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
+                def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                 if(results?.success && results?.error != true) {
                     rtn.success = true
@@ -691,7 +697,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
 				def results = new ServiceResponse()
 				requestOptions.body = JsonOutput.toJson(['dnsRecord':['ttl':"${record.ttl ?: 3600}",'data':record.content,'type':recordType,'name':fqdn]])
 
-                results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'POST')
+                results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'POST')
 
                 if(results.success && !results.error) {
                     record.externalId = results.data.result?.ref.tokenize('/')[1]
@@ -783,7 +789,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
                 apiPath = getServicePath(rpcConfig.serviceUrl) + platformUrl + 'ranges/' + networkPool.externalId.toString() + '/nextFreeAddress'
                 requestOptions.queryParams = ['temporaryClaimTime':'120']
 
-                results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
+                results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                 if (results?.success) {
                 networkPoolIp.ipAddress = results?.data?.result?.address
@@ -819,14 +825,14 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
                 requestOptions.queryParams = [:]
 				requestOptions.body = JsonOutput.toJson(['dnsRecord':['ttl':'3600','data':networkPoolIp.ipAddress,'type':recordType,'name':fqdn]])
 
-                results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'POST')
+                results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'POST')
             } else {
                 log.info("Attempting IPAM record...")
                 apiPath = getServicePath(rpcConfig.serviceUrl) + platformUrl + 'ipamRecords/ref'
                 requestOptions.queryParams = [:]
                 requestOptions.body = JsonOutput.toJson(['ref':networkPoolIp.ipAddress,'objType':'IPAddress','saveComment':'Created with Morpheus','properties':[(customProperty):hostname]])
 
-                results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'PUT')
+                results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'PUT')
             }
 
             if (results.success && !results.error) {
@@ -859,7 +865,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
             requestOptions.queryParams = [:]
             requestOptions.body = JsonOutput.toJson(['ref':networkPoolIp.ipAddress,'objType':'IPAddress','saveComment':'Created with Morpheus','properties':[(customProperty):hostname]])
 
-            results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'PUT')
+            results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'PUT')
 
             if (results.success && !results.error) {
                     return ServiceResponse.success(networkPoolIp)
@@ -897,7 +903,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
             def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
             def apiPath = getServicePath(rpcConfig.serviceUrl) + platformUrl + 'ipamRecords/' + networkPoolIp.externalId.toString()
 
-            results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'DELETE')
+            results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'DELETE')
 
             if(results.success && !results.error) {
                 return ServiceResponse.success(networkPoolIp)
@@ -913,7 +919,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
         }
 	}
 
-	private ServiceResponse listNetworks(HttpApiClient client, NetworkPoolServer poolServer, Map opts = [:]) {
+	private ServiceResponse listNetworks(HttpApiClient client,String token, NetworkPoolServer poolServer, Map opts = [:]) {
         def rtn = new ServiceResponse()
         rtn.data = [] // Initialize rtn.data as an empty list
         try {
@@ -933,9 +939,10 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
                 while(hasMore && attempt < 1000) {
                     attempt++
                     HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
+                    requestOptions.headers = [Authorization: "Bearer ${token}".toString()]
                     requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
-                    def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
+                    def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                     if(results?.success && results?.error != true) {
                         rtn.success = true
@@ -962,9 +969,10 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
                 }
             } else {
                 HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
+                requestOptions.headers = [Authorization: "Bearer ${token}".toString()]
                 requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
-                def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
+                def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                 if(results?.success && results?.error != true) {
                     rtn.success = true
@@ -991,8 +999,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
             return morpheus.network.pool.listById(poolIdents.collect{it.id})
         }.flatMap { NetworkPool pool ->
             def listResults = listHostRecords(client,poolServer,pool)
-            if (listResults.success) {
-
+            if (listResults.success && !listResults.error && listResults.data) {
                 List<Map> apiItems = listResults.data
                 Observable<NetworkPoolIpIdentityProjection> poolIps = morpheus.network.pool.poolIp.listIdentityProjections(pool.id)
                 SyncTask<NetworkPoolIpIdentityProjection, Map, NetworkPoolIp> syncTask = new SyncTask<NetworkPoolIpIdentityProjection, Map, NetworkPoolIp>(poolIps, apiItems)
@@ -1105,7 +1112,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
                     HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
                     requestOptions.queryParams = ['filter':'state!=Free',max:maxResults.toString(),offset:start.toString()]
 
-                    def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
+                    def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                     if(results?.success && results?.error != true) {
                         rtn.success = true
@@ -1134,7 +1141,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
                 HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
                 requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
-                def results = client.callJsonApi(apiUrl,apiPath,rpcConfig.username,rpcConfig.password,requestOptions,'GET')
+                def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                 if(results?.success && results?.error != true) {
                     rtn.success = true
@@ -1222,8 +1229,12 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
         def rtn = [success:false]
         try {
             HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-            requestOptions.headers = ['content-type':'application/x-www-form-urlencoded',client_id:'morph-automation',grant_type:'password',scope:'write',accept:application/json,]
-            requestOptions.body = JsonOutput.toJson([username:rpcConfig.username, password:rpcConfig.password])
+            requestOptions.headers = ['content-type':'application/x-www-form-urlencoded','client_id':'morph-automation','grant_type':'password','scope':'write','accept':'application/json']
+
+            def username = URLEncoder.encode(rpcConfig.username, "UTF-8")
+            def password = URLEncoder.encode(rpcConfig.password, "UTF-8")
+
+            requestOptions.body = "username=${username}&password=${password}"
 
             def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
             def apiPath = getServicePath(rpcConfig.serviceUrl) + authPath
@@ -1231,7 +1242,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
             def results = client.callJsonApi(apiUrl,apiPath,requestOptions,'POST')
             if(results?.success && results?.error != true) {
                 log.debug("login: ${results}")
-                rtn.token = results.data?.key?.trim()
+                rtn.token = results.data?.access_token?.trim()
                 rtn.success = true
             } else {
                 return ServiceResponse.error("Get Token Error")
@@ -1260,7 +1271,7 @@ class MorpheusProvider implements IPAMProvider, DNSProvider {
             username:poolServer.credentialData?.username ?: poolServer.serviceUsername,
             password:poolServer.credentialData?.password ?: poolServer.servicePassword,
             serviceUrl:poolServer.serviceUrl,
-            ignoreSSL: poolServer.ignoreSsl
+            ignoreSSL:poolServer.ignoreSsl
         ]
     }
 
