@@ -193,6 +193,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 	protected ServiceResponse refreshNetworkPoolServer(NetworkPoolServer poolServer, Map opts) {
 		def rtn = new ServiceResponse()
         def tokenResults
+        def token
         def rpcConfig = getRpcConfig(poolServer)
 		log.debug("refreshNetworkPoolServer: {}", poolServer.dump())
 		HttpApiClient morpheusRemoteClient = new HttpApiClient()
@@ -211,6 +212,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 			if(hostOnline) {
                 tokenResults = login(morpheusRemoteClient,rpcConfig)
                 if(tokenResults.success) {
+                token = tokenResults?.token as String
                 testResults = testNetworkPoolServer(morpheusRemoteClient,token,poolServer) as ServiceResponse<Map>
                     if(!testResults.success) {
                         morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'error calling Micetro').blockingGet()
@@ -227,9 +229,8 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
             }
 			Date now = new Date()
             if(testResults?.success) {
-                String token = tokenResults?.token as String
                 cacheNetworks(morpheusRemoteClient,token,poolServer,opts)
-                cacheZones(morpheusRemoteClient,token,poolServer,opts)
+                // cacheZones(morpheusRemoteClient,token,poolServer,opts)
                 if(poolServer?.configMap?.inventoryExisting) {
                     cacheIpAddressRecords(morpheusRemoteClient,token,poolServer,opts)
                     cacheZoneRecords(morpheusRemoteClient,token,poolServer,opts)
@@ -355,9 +356,9 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 	}
 
     // Cache Zones methods
-	def cacheZones(HttpApiClient client, NetworkPoolServer poolServer, Map opts = [:]) {
+	def cacheZones(HttpApiClient client,String token,NetworkPoolServer poolServer, Map opts = [:]) {
 		try {
-			def listResults = listZones(client, poolServer, opts)
+			def listResults = listZones(client,token,poolServer, opts)
 
 			log.info("listZoneResults: {}", listResults)
 			if (listResults.success && listResults.data != null) {
@@ -388,7 +389,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 		}
 	}
 	
-    private ServiceResponse listZones(HttpApiClient client, NetworkPoolServer poolServer, Map opts = [:]) {
+    private ServiceResponse listZones(HttpApiClient client, String token, NetworkPoolServer poolServer, Map opts = [:]) {
         def rtn = new ServiceResponse()
         rtn.data = [] // Initialize rtn.data as an empty list
         try {
@@ -408,6 +409,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
                 while(hasMore && attempt < 1000) {
                     attempt++
                     HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
+                    requestOptions.headers = [Authorization: "Bearer ${token}".toString()]
                     requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                     def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
@@ -1167,11 +1169,11 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 		def rtn = new ServiceResponse()
 		try {
 			def opts = [doPaging:false, maxResults:1]
-			def networkList = listNetworks(client, poolServer, opts)
+			def networkList = listNetworks(client,token,poolServer, opts)
 			rtn.success = networkList.success
 			rtn.data = [:]
 			if(!networkList.success) {
-				rtn.msg = 'error connecting to Micetro'
+				rtn.msg = 'Error connecting to Morpheus'
 			}
 		} catch(e) {
 			rtn.success = false
@@ -1197,8 +1199,8 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 	 */
 	Collection<NetworkPoolType> getNetworkPoolTypes() {
 		return [
-			new NetworkPoolType(code:'micetro', name:'Micetro', creatable:false, description:'Micetro', rangeSupportsCidr: false),
-			new NetworkPoolType(code:'micetroipv6', name:'Micetro IPv6', creatable:false, description:'Micetro IPv6', rangeSupportsCidr: true, ipv6Pool:true)
+			new NetworkPoolType(code:'morpheusremote', name:'Morpheus', creatable:false, description:'Morpheus', rangeSupportsCidr: false),
+			new NetworkPoolType(code:'morpheusremoteipv6', name:'Morpheus IPv6', creatable:false, description:'Morpheus IPv6', rangeSupportsCidr: true, ipv6Pool:true)
 		]
 	}
 
@@ -1228,17 +1230,16 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
     def login(HttpApiClient client, rpcConfig) {
         def rtn = [success:false]
         try {
-            HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-            // def username = URLEncoder.encode(rpcConfig.username, "UTF-8")
-            // def password = URLEncoder.encode(rpcConfig.password, "UTF-8")
+            HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL,contentType: 'form')
 
             def username = rpcConfig.username.toString()
             def password = rpcConfig.password.toString()
 
             requestOptions.queryParams = ['client_id':'morph-automation','grant_type':'password','scope':'write']
-            requestOptions.headers = ['content-type':'application/x-www-form-urlencoded','accept':'application/json']
+            requestOptions.headers = ['Content-Type':'application/x-www-form-urlencoded']
 
-            requestOptions.body = "username=${username}&password=${password}"
+            // requestOptions.body = "username=${username}&password=${password}"
+            requestOptions.body = ['username':username,'password':password]
 
             def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
             def apiPath = getServicePath(rpcConfig.serviceUrl) + authPath
