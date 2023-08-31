@@ -193,6 +193,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 	protected ServiceResponse refreshNetworkPoolServer(NetworkPoolServer poolServer, Map opts) {
 		def rtn = new ServiceResponse()
         def tokenResults
+        def token
         def rpcConfig = getRpcConfig(poolServer)
 		log.debug("refreshNetworkPoolServer: {}", poolServer.dump())
 		HttpApiClient morpheusRemoteClient = new HttpApiClient()
@@ -211,6 +212,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 			if(hostOnline) {
                 tokenResults = login(morpheusRemoteClient,rpcConfig)
                 if(tokenResults.success) {
+                token = tokenResults?.token as String
                 testResults = testNetworkPoolServer(morpheusRemoteClient,token,poolServer) as ServiceResponse<Map>
                     if(!testResults.success) {
                         morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'error calling Micetro').blockingGet()
@@ -227,7 +229,6 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
             }
 			Date now = new Date()
             if(testResults?.success) {
-                String token = tokenResults?.token as String
                 cacheNetworks(morpheusRemoteClient,token,poolServer,opts)
                 cacheZones(morpheusRemoteClient,token,poolServer,opts)
                 if(poolServer?.configMap?.inventoryExisting) {
@@ -287,29 +288,38 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
                 def id = it.id
                 def newNetworkPool
                 def name = it.name
-                def cidr = it.name
-                def startAddress = it.from
-                def endAddress = it.to
                 def rangeConfig
                 def addRange
+                def cidr
+                def startAddress
+                def endAddress
+                def addressCount
 
                 if(!it.type.code.contains('ipv6')) {
                     def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${id}",
-                                    type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id]
+                                    type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount:it.ipCount]
                     newNetworkPool = new NetworkPool(addConfig)
                     newNetworkPool.ipRanges = []
                     it.ipRanges?.each { range ->
-                        rangeConfig = [cidr:range.cidr, startAddress:range.startAddress, endAddress:range.endAddress, addressCount:addConfig.ipCount]
+                        cidr = range?.cidr
+                        startAddress = range?.startAddress ?: null
+                        endAddress = range?.endAddress ?: null
+                        addressCount = range?.addressCount ?: null
+                        rangeConfig = [externalId:range.id,cidr:cidr, startAddress:startAddress.toString(), endAddress:endAddress.toString(), addressCount:addressCount]
                         addRange = new NetworkPoolRange(rangeConfig)
                         newNetworkPool.ipRanges.add(addRange)
                     }
                 } else {
                     def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${id}",
-                                    cidr: cidr, type: poolTypeIpv6, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id]
+                                    type: poolTypeIpv6, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount:it.ipCount]
                     newNetworkPool = new NetworkPool(addConfig)
                     newNetworkPool.ipRanges = []
                     it.ipRanges?.each { range ->
-                        rangeConfig = [cidr:range.cidr, startAddress:range.startAddress, endAddress:range.endAddress, addressCount:addConfig.ipCount]
+                        cidr = range?.cidrIPv6 ?: range?.cidr ?: null
+                        startAddress = range?.startAddress ?: null
+                        endAddress = range?.endAddress ?: null
+                        addressCount = range?.addressCount ?: null
+                        rangeConfig = [externalId:range.id,cidrIPv6:cidr, startIPv6Address:startAddress,endIPv6Address:endAddress, addressCount:addressCount]
                         addRange = new NetworkPoolRange(rangeConfig)
                         newNetworkPool.ipRanges.add(addRange)
                     }
@@ -333,17 +343,39 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 			if(existingItem) {
 				//update view ?
 				def save = false
-				def networkIp = network.name
-				def displayName = network.customProperties.Title ?: network.name
 				
-                if(existingItem?.displayName != displayName) {
-					existingItem.displayName = displayName
+                if(existingItem?.displayName != network.displayName) {
+					existingItem.displayName = network.displayName
 					save = true
 				}
-				if(existingItem?.cidr != networkIp) {
-					existingItem.cidr = networkIp
+                if(existingItem?.name != network.name) {
+					existingItem.name = network.name
 					save = true
 				}
+                if(existingItem?.ipCount != network.ipCount) {
+					existingItem.ipCount = network.ipCount
+					save = true
+				}
+				if(existingItem?.cidr != network.cidr) {
+					existingItem.cidr = network.cidr
+					save = true
+				}
+                // if(existingItem?.startAddress != network.cidrIPv6) {
+				// 	existingItem.startAddress = network.cidrIPv6
+				// 	save = true
+				// }
+                // if(existingItem?.startAddress != network.startAddress) {
+				// 	existingItem.startAddress = network.startAddress
+				// 	save = true
+				// }
+                // if(existingItem?.endAddress != network.endAddress) {
+				// 	existingItem.endAddress = network.endAddress
+				// 	save = true
+				// }
+                // if(existingItem?.addressCount != network.addressCount) {
+				// 	existingItem.addressCount = network.addressCount
+				// 	save = true
+				// }
                 if(save) {
                     poolsToUpdate << existingItem
                 }
@@ -355,9 +387,9 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 	}
 
     // Cache Zones methods
-	def cacheZones(HttpApiClient client, NetworkPoolServer poolServer, Map opts = [:]) {
+	def cacheZones(HttpApiClient client,String token,NetworkPoolServer poolServer, Map opts = [:]) {
 		try {
-			def listResults = listZones(client, poolServer, opts)
+			def listResults = listZones(client,token,poolServer, opts)
 
 			log.info("listZoneResults: {}", listResults)
 			if (listResults.success && listResults.data != null) {
@@ -388,7 +420,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 		}
 	}
 	
-    private ServiceResponse listZones(HttpApiClient client, NetworkPoolServer poolServer, Map opts = [:]) {
+    private ServiceResponse listZones(HttpApiClient client, String token, NetworkPoolServer poolServer, Map opts = [:]) {
         def rtn = new ServiceResponse()
         rtn.data = [] // Initialize rtn.data as an empty list
         try {
@@ -408,6 +440,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
                 while(hasMore && attempt < 1000) {
                     attempt++
                     HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
+                    requestOptions.headers = [Authorization: "Bearer ${token}".toString()]
                     requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                     def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
@@ -437,6 +470,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
                 }
             } else {
                 HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
+                requestOptions.headers = [Authorization: "Bearer ${token}".toString()]
                 requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                 def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
@@ -462,13 +496,17 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 
     void addMissingZones(NetworkPoolServer poolServer, Collection addList) {
 		List<NetworkDomain> missingZonesList = addList?.collect { Map add ->
-			NetworkDomain networkDomain = new NetworkDomain()
-			networkDomain.externalId = add.id
-			networkDomain.name = NetworkUtility.getFriendlyDomainName(add.name as String)
-			networkDomain.fqdn = NetworkUtility.getFqdnDomainName(add.fqdn as String)
-			networkDomain.refSource = 'integration'
-			networkDomain.zoneType = add.zoneType
-			return networkDomain
+            if(add.name != 'localdomain') {
+                NetworkDomain networkDomain = new NetworkDomain()
+                networkDomain.externalId = add.id
+                networkDomain.name = NetworkUtility.getFriendlyDomainName(add.name as String)
+                networkDomain.fqdn = NetworkUtility.getFqdnDomainName(add.fqdn as String)
+                networkDomain.refSource = 'integration'
+                networkDomain.zoneType = 'Authoritative'
+                return networkDomain
+            } else {
+                missingZonesList -= add
+            }
 		}
 		log.info("Adding Missing Zone Records! ${missingZonesList}")
 		morpheus.network.domain.create(poolServer.integration.id, missingZonesList).blockingGet()
@@ -484,8 +522,16 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 					existingItem.externalId = update.masterItem.id
 					save = true
 				}
+                if(existingItem.name != update.masterItem.name) {
+                    existingItem.name = update.masterItem.name
+                    save = true
+                }
+                if(existingItem.fqdn != update.masterItem.fqdn) {
+                    existingItem.fqdn = update.masterItem.fqdn
+                    save = true
+                }
 				if(!existingItem.refId) {
-					existingItem.refType = update.masterItem.zoneType
+					existingItem.refType = 'Authoritative'
 					existingItem.refId = poolServer.integration.id
 					existingItem.refSource = 'integration'
 					save = true
@@ -501,30 +547,30 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 		}
 	}
 
-    def cacheZoneRecords(HttpApiClient client, NetworkPoolServer poolServer, Map opts) {
+    def cacheZoneRecords(HttpApiClient client,String token, NetworkPoolServer poolServer, Map opts) {
 		morpheus.network.domain.listIdentityProjections(poolServer.integration.id).flatMap {NetworkDomainIdentityProjection domain ->
-			Completable.mergeArray(cacheZoneDomainRecords(client,poolServer,domain,'A',opts),
-				cacheZoneDomainRecords(client,poolServer, domain, 'AAAA', opts),
-				cacheZoneDomainRecords(client,poolServer, domain, 'PTR', opts),
-				cacheZoneDomainRecords(client,poolServer, domain, 'TXT', opts),
-				cacheZoneDomainRecords(client,poolServer, domain, 'CNAME', opts),
-				cacheZoneDomainRecords(client, poolServer, domain, 'MX', opts)
+			Completable.mergeArray(cacheZoneDomainRecords(client,token,poolServer,domain,'A',opts),
+				cacheZoneDomainRecords(client,token,poolServer, domain, 'AAAA', opts),
+				cacheZoneDomainRecords(client,token,poolServer, domain, 'PTR', opts),
+				cacheZoneDomainRecords(client,token,poolServer, domain, 'TXT', opts),
+				cacheZoneDomainRecords(client,token,poolServer, domain, 'CNAME', opts),
+				cacheZoneDomainRecords(client,token,poolServer, domain, 'MX', opts)
 			).toObservable().subscribeOn(Schedulers.io())
 		}.doOnError{ e ->
 			log.error("cacheZoneRecords error: ${e}", e)
 		}.subscribe()
 	}  
 
-	Completable cacheZoneDomainRecords(HttpApiClient client, NetworkPoolServer poolServer, NetworkDomainIdentityProjection domain, String recordType, Map opts) {
-		log.info "cacheZoneDomainRecords $poolServer, $domain, $recordType, $opts"
-		def listResults = listZoneRecords(client, poolServer, domain, recordType, opts)
+	Completable cacheZoneDomainRecords(HttpApiClient client,String token, NetworkPoolServer poolServer, NetworkDomainIdentityProjection domain, String recordType, Map opts) {
+		log.debug "cacheZoneDomainRecords $poolServer, $domain, $recordType, $opts"
+		def listResults = listZoneRecords(client,token, poolServer, domain, recordType, opts)
 		log.debug("listResults: {}",listResults)
 		if(listResults.success) {
 			List<Map> apiItems = listResults.data as List<Map>
 			Observable<NetworkDomainRecordIdentityProjection> domainRecords = morpheus.network.domain.record.listIdentityProjections(domain,recordType)
 			SyncTask<NetworkDomainRecordIdentityProjection,Map,NetworkDomainRecord> syncTask = new SyncTask(domainRecords, apiItems as Collection<Map>)
 			syncTask.addMatchFunction { NetworkDomainRecordIdentityProjection domainObject, Map apiItem ->
-				domainObject.externalId == apiItem.ref.tokenize('/')[1]
+				domainObject.externalId == apiItem.id
 			}.onDelete {removeItems ->
 				morpheus.network.domain.record.remove(domain, removeItems).blockingGet()
 			}.onAdd { itemsToAdd ->
@@ -551,7 +597,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 		List<NetworkDomainRecord> records = []
 		addList?.each {            
             if (it.name) {
-                def addConfig = [networkDomain: new NetworkDomain(id: domain.id), externalId:it.ref.tokenize('/')[1],ttl: it.ttl.toInteger(), name: it.name, content: it.data, fqdn: "${it.name}.${domain.name ?: ""}", type: recordType, source: 'sync']
+                def addConfig = [networkDomain: new NetworkDomain(id: domain.id), externalId:it.id,ttl: it.ttl.toInteger(), name: it.name, content: it.content, fqdn: "${it.name}.${domain.name ?: ""}", type: recordType, source: 'sync']
 
                 def newObj = new NetworkDomainRecord(addConfig)
                 records.add(newObj)
@@ -568,8 +614,8 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 				//update view ?
 				def save = false
                 def name = update.masterItem.name
-                def fqdn = "${name}.${domain.name ?: ""}"
-                def data = update.masterItem.data
+                def fqdn = update.masterItem.fqdn
+                def data = update.masterItem.content
                 def ttl = update.masterItem.ttl.toInteger()
 
                 if (existingItem.name != name) {
@@ -602,13 +648,13 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 		}
 	}
 
-    ServiceResponse listZoneRecords(HttpApiClient client, NetworkPoolServer poolServer, NetworkDomainIdentityProjection domain, String recordType = 'A', Map opts=[:]) {
+    ServiceResponse listZoneRecords(HttpApiClient client,String token, NetworkPoolServer poolServer, NetworkDomainIdentityProjection domain, String recordType = 'A', Map opts=[:]) {
         def rtn = new ServiceResponse()
         rtn.data = [] // Initialize rtn.data as an empty list
         try {
             def rpcConfig = getRpcConfig(poolServer)
             def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
-            def apiPath = getServicePath(rpcConfig.serviceUrl) + platformUrl + 'dnsZones/' + domain.externalId + '/dnsRecords'
+            def apiPath = getServicePath(rpcConfig.serviceUrl) + networkDomainsPath + domain.externalId + '/records'
             def hasMore = true
             def attempt = 0
             def doPaging = opts.doPaging != null ? opts.doPaging : true
@@ -622,14 +668,19 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
                 while(hasMore && attempt < 1000) {
                     attempt++
                     HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-                    requestOptions.queryParams = ["filter":"type=${recordType}",max:maxResults.toString(),offset:start.toString()]
+                    requestOptions.headers = [Authorization: "Bearer ${token}".toString()]
+                    requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                     def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                     if(results?.success && results?.error != true) {
                         rtn.success = true
-                        if(results.data?.result?.dnsRecords?.size() > 0) {
-                            rtn.data += results.data.result.dnsRecords
+                        if(results.data?.networkDomainRecords?.size() > 0) {
+                            results.data.networkDomainRecords.each { item ->
+                                if (item.type == recordType) {
+                                    rtn.data.add(item)
+                                }
+                            }
 
                             if(doPaging == true) {
                                 start += maxResults
@@ -652,14 +703,19 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
                 
             } else {
                 HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
+                requestOptions.headers = [Authorization: "Bearer ${token}".toString()]
                 requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                 def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                 if(results?.success && results?.error != true) {
                     rtn.success = true
-                    if(results.data?.result?.dnsRecords?.size() > 0) {
-                        rtn.data = results.data.result.dnsRecords
+                    if(results.data?.networkDomainRecords?.size() > 0) {
+                        results.data.networkDomainRecords.each { item ->
+                            if (item.type == recordType) {
+                                rtn.data.add(item)
+                            }
+                        }
                     }
                 } else {
                     if(!rtn.success) {
@@ -760,12 +816,13 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
         def results = new ServiceResponse()
         def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
         def apiPath
+        def domainRecord
 
         HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
+        requestOptions.headers = [Authorization: "Bearer ${token}".toString()]
 
         try {
             def hostname = networkPoolIp.hostname
-            def customProperty = poolServer.configMap?.nameProperty
             def recordType
 
             if(domain && hostname && !hostname.endsWith(domain.name))  {
@@ -783,64 +840,59 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
                     log.error("Invalid IP Address Requested: ${networkPoolIp.ipAddress}", results)
                     return ServiceResponse.error("Invalid IP Address Requested: ${networkPoolIp.ipAddress}")
                 }
+
+                requestOptions.body = ['networkPoolIp':['hostname':hostname,'ipAddress':networkPoolIp.ipAddress]]
             } else {
                 // Grab next available IP
-                
-                apiPath = getServicePath(rpcConfig.serviceUrl) + platformUrl + 'ranges/' + networkPool.externalId.toString() + '/nextFreeAddress'
-                requestOptions.queryParams = ['temporaryClaimTime':'120']
-
-                results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
-
-                if (results?.success) {
-                networkPoolIp.ipAddress = results?.data?.result?.address
-                } else {
-                    log.warn("API Call Failed to allocate IP Address")
-                    return ServiceResponse.error("API Call Failed to allocate IP Address",null,networkPoolIp)
-                }
+                requestOptions.body = ['networkPoolIp':['hostname':hostname]]
             }
+            
+            apiPath = getServicePath(rpcConfig.serviceUrl) + networkPoolsPath + networkPool.externalId.toString() + '/ips'
+            results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'POST')
 
-            if (networkPool.type.code == 'micetro'){
-                recordType = 'A'
+            if(results.success && !results.error) {
+                networkPoolIp.externalId = results.networkPoolIp.id
+                networkPoolIp.ipAddress = results.networkPoolIp.ipAddress
+                return ServiceResponse.success(networkPoolIp)
             } else {
-                recordType = 'AAAA'
+                log.warn("API Call Failed to allocate IP Address")
+                return ServiceResponse.error("API Call Failed to allocate IP Address",null,networkPoolIp)
             }
 
-            if(createARecord) {
-                networkPoolIp.domain = domain
-            }
             if (networkPoolIp.id) {
                 networkPoolIp = morpheus.network.pool.poolIp.save(networkPoolIp)?.blockingGet()
             } else {
                 networkPoolIp = morpheus.network.pool.poolIp.create(networkPoolIp)?.blockingGet()
             }
 
+            if (networkPool.type.code == 'morpheusremote'){
+                recordType = 'A'
+            } else {
+                recordType = 'AAAA'
+            }
+            if(createARecord) {
+                networkPoolIp.domain = domain
+            }
+
             if (createARecord && domain && domain.refId == poolServer.integration.id) {
                 log.info("Attempting DNS record...")
-                def fqdn = hostname
-				if(hostname.endsWith(domain.name)) {
-					fqdn = hostname.tokenize('.')[0]
-				}
 
-				apiPath = platformUrl + 'dnsZones/' + domain.externalId.toString() + '/dnsRecords'
-                requestOptions.queryParams = [:]
-				requestOptions.body = JsonOutput.toJson(['dnsRecord':['ttl':'3600','data':networkPoolIp.ipAddress,'type':recordType,'name':fqdn]])
+                apiPath = getServicePath(rpcConfig.serviceUrl) + networkDomainsPath + domain.externalId.toString() + '/records'
+                requestOptions.body = ['networkDomainRecord':['name':hostname,'fqdn':hostname,'content':networkPoolIp.ipAddress,'ttl':3600,'type':recordType]]
 
                 results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'POST')
-            } else {
-                log.info("Attempting IPAM record...")
-                apiPath = getServicePath(rpcConfig.serviceUrl) + platformUrl + 'ipamRecords/ref'
-                requestOptions.queryParams = [:]
-                requestOptions.body = JsonOutput.toJson(['ref':networkPoolIp.ipAddress,'objType':'IPAddress','saveComment':'Created with Morpheus','properties':[(customProperty):hostname]])
 
-                results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'PUT')
+                if (results.success && !results.error) {
+                    domainRecord = new NetworkDomainRecord(networkDomain: domain, networkPoolIp: networkPoolIp, name: hostname, fqdn: hostname, source: 'user', type: recordType, externalId: results.id)
+                    morpheus.network.domain.record.create(domainRecord).blockingGet()
+                }
             }
 
             if (results.success && !results.error) {
-                networkPoolIp.externalId = networkPoolIp.ipAddress
-                return ServiceResponse.success(networkPoolIp)
+                return ServiceResponse.success(domainRecord)
             } else {
-                log.warn("API Call Failed to allocate IP Address")
-                return ServiceResponse.error("API Call Failed to allocate IP Address",null,networkPoolIp)
+                log.warn("API Call Failed to allocate DNS Record")
+                return ServiceResponse.error("API Call Failed to allocate DNS Record",null,networkPoolIp)
             }
         } catch(e) {
             log.warn("API Call Failed to allocate IP Address {}",e)
@@ -919,7 +971,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
         }
 	}
 
-	private ServiceResponse listNetworks(HttpApiClient client,String token, NetworkPoolServer poolServer, Map opts = [:]) {
+	private ServiceResponse listNetworks(HttpApiClient client, String token, NetworkPoolServer poolServer, Map opts = [:]) {
         def rtn = new ServiceResponse()
         rtn.data = [] // Initialize rtn.data as an empty list
         try {
@@ -994,19 +1046,19 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 	}
 
 	// cacheIpAddressRecords
-    void cacheIpAddressRecords(HttpApiClient client, NetworkPoolServer poolServer, Map opts=[:]) {
+    void cacheIpAddressRecords(HttpApiClient client,String token, NetworkPoolServer poolServer, Map opts=[:]) {
         morpheus.network.pool.listIdentityProjections(poolServer.id).buffer(50).flatMap { Collection<NetworkPoolIdentityProjection> poolIdents ->
             return morpheus.network.pool.listById(poolIdents.collect{it.id})
         }.flatMap { NetworkPool pool ->
-            def listResults = listHostRecords(client,poolServer,pool)
+            def listResults = listHostRecords(client,token,poolServer,pool)
             if (listResults.success && !listResults.error && listResults.data) {
                 List<Map> apiItems = listResults.data
                 Observable<NetworkPoolIpIdentityProjection> poolIps = morpheus.network.pool.poolIp.listIdentityProjections(pool.id)
                 SyncTask<NetworkPoolIpIdentityProjection, Map, NetworkPoolIp> syncTask = new SyncTask<NetworkPoolIpIdentityProjection, Map, NetworkPoolIp>(poolIps, apiItems)
-                return syncTask.addMatchFunction { NetworkPoolIpIdentityProjection ipObject, Map apiItem ->
-                    ipObject.externalId == "${apiItem.id}"
+                return syncTask.addMatchFunction { NetworkPoolIpIdentityProjection domainObject, Map apiItem ->
+                    domainObject.externalId == "${apiItem.id}"
                 }.addMatchFunction { NetworkPoolIpIdentityProjection domainObject, Map apiItem ->
-                    domainObject.ipAddress == apiItem?.address?.tokenize('/')[0]
+                    domainObject.ipAddress == apiItem.ipAddress
                 }.onDelete {removeItems ->
                     morpheus.network.pool.poolIp.remove(pool.id, removeItems).blockingGet()
                 }.onAdd { itemsToAdd ->
@@ -1023,7 +1075,7 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
                     updateMatchedIps(updateItems)
                 }.observe()
             } else {
-                return Single.just(false)
+                return Single.just(false).toObservable()
             }
         }.doOnError{ e ->
             log.error("cacheIpRecords error: ${e}", e)
@@ -1033,21 +1085,14 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 
 	void addMissingIps(NetworkPool pool, List addList) {
         List<NetworkPoolIp> poolIpsToAdd = addList?.collect { it ->
-            def externalId = it.address
-			def ipAddress = it.address
-			def types = it.state
-            def names = it.dnsHosts?.dnsRecord?.name ?: null
-			def ipType = 'assigned'
-            if(types == ('Claimed' || 'Held')) {
-                ipType = 'reserved'
-            }
-            if(types == 'Assigned') {
-                ipType = 'assigned'
-            }
-			def addConfig = [networkPool: pool, networkPoolRange: pool.ipRanges ? pool.ipRanges.first() : null, ipType: ipType, hostname: names, ipAddress: ipAddress.toString(), externalId:externalId]
+            def externalId = it.id
+			def ipAddress = it.ipAddress
+			def ipType = it.ipType ?: 'assigned'
+            def hostname = it.hostname
+			def addConfig = [networkPool: pool, networkPoolRange: pool.ipRanges ? pool.ipRanges.first() : null, ipType: ipType, hostname: hostname, ipAddress: ipAddress.toString(), externalId:externalId.toString()]
 			def newObj = new NetworkPoolIp(addConfig)
-			return newObj
-
+			
+            return newObj
 		}
 		if(poolIpsToAdd.size() > 0) {
 			morpheus.network.pool.poolIp.create(pool, poolIpsToAdd).blockingGet()
@@ -1060,15 +1105,8 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 			NetworkPoolIp existingItem = update.existingItem
             // reserved,assigned,unmanaged,transient
 			if(existingItem) {
-				def hostname = update.masterItem.dnsHosts?.dnsRecord?.name ?: null
-                def types = update.masterItem.state
-				def ipType = 'assigned'
-                if(types == ('Claimed' || 'Held')) {
-                    ipType = 'reserved'
-                }
-                if(types == 'Assigned') {
-                    ipType = 'assigned'
-                }
+				def hostname = update.masterItem.hostname
+				def ipType = update.masterItem.ipType
 				def save = false
 				if(existingItem.ipType != ipType) {
 					existingItem.ipType = ipType
@@ -1085,18 +1123,18 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 			}
 		}
 		if(ipsToUpdate.size() > 0) {
-			morpheus.network.pool.poolIp.save(ipsToUpdate)
+			morpheus.network.pool.poolIp.save(ipsToUpdate).blockingGet()
 		}
 	}
 
 
-	private ServiceResponse listHostRecords(HttpApiClient client, NetworkPoolServer poolServer,NetworkPool networkPool, Map opts = [:]) {
+	private ServiceResponse listHostRecords(HttpApiClient client,String token, NetworkPoolServer poolServer,NetworkPool networkPool, Map opts = [:]) {
         def rtn = new ServiceResponse()
         rtn.data = [] // Initialize rtn.data as an empty list
         try {
             def rpcConfig = getRpcConfig(poolServer)
             def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
-            def apiPath = getServicePath(rpcConfig.serviceUrl) + platformUrl + 'ranges/' + networkPool.externalId.toString() + '/ipamRecords'
+            def apiPath = getServicePath(rpcConfig.serviceUrl) + networkPoolsPath + networkPool.externalId.toString() + '/ips'
             def hasMore = true
             def attempt = 0
             def doPaging = opts.doPaging != null ? opts.doPaging : true
@@ -1110,14 +1148,15 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
                 while(hasMore && attempt < 1000) {
                     attempt++
                     HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-                    requestOptions.queryParams = ['filter':'state!=Free',max:maxResults.toString(),offset:start.toString()]
+                    requestOptions.headers = [Authorization: "Bearer ${token}".toString()]
+                    requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                     def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                     if(results?.success && results?.error != true) {
                         rtn.success = true
-                        if(results.data?.result?.ipamRecords?.size() > 0) {
-                            rtn.data += results.data.result.ipamRecords
+                        if(results.data?.networkPoolIps?.size() > 0) {
+                            rtn.data += results.data?.networkPoolIps
 
                             if(doPaging == true) {
                                 start += maxResults
@@ -1139,14 +1178,15 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
                 }
             } else {
                 HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
+                requestOptions.headers = [Authorization: "Bearer ${token}".toString()]
                 requestOptions.queryParams = [max:maxResults.toString(),offset:start.toString()]
 
                 def results = client.callJsonApi(apiUrl,apiPath,null,null,requestOptions,'GET')
 
                 if(results?.success && results?.error != true) {
                     rtn.success = true
-                    if(results.data?.result?.ipamRecords?.size() > 0) {
-                        rtn.data = results.data.result.ipamRecords
+                    if(results.data?.networkPoolIps?.size() > 0) {
+                        rtn.data = results.data?.networkPoolIps
                     }
                 } else {
                     if(!rtn.success) {
@@ -1167,11 +1207,11 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 		def rtn = new ServiceResponse()
 		try {
 			def opts = [doPaging:false, maxResults:1]
-			def networkList = listNetworks(client, poolServer, opts)
+			def networkList = listNetworks(client,token,poolServer, opts)
 			rtn.success = networkList.success
 			rtn.data = [:]
 			if(!networkList.success) {
-				rtn.msg = 'error connecting to Micetro'
+				rtn.msg = 'Error connecting to Morpheus'
 			}
 		} catch(e) {
 			rtn.success = false
@@ -1197,8 +1237,8 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 	 */
 	Collection<NetworkPoolType> getNetworkPoolTypes() {
 		return [
-			new NetworkPoolType(code:'micetro', name:'Micetro', creatable:false, description:'Micetro', rangeSupportsCidr: false),
-			new NetworkPoolType(code:'micetroipv6', name:'Micetro IPv6', creatable:false, description:'Micetro IPv6', rangeSupportsCidr: true, ipv6Pool:true)
+			new NetworkPoolType(code:'morpheusremote', name:'Morpheus', creatable:false, description:'Morpheus', rangeSupportsCidr: false),
+			new NetworkPoolType(code:'morpheusremoteipv6', name:'Morpheus IPv6', creatable:false, description:'Morpheus IPv6', rangeSupportsCidr: true, ipv6Pool:true)
 		]
 	}
 
@@ -1215,26 +1255,29 @@ class MorpheusRemoteProvider implements IPAMProvider, DNSProvider {
 				new OptionType(code: 'morpheus.serviceUsername', name: 'Service Username', inputType: OptionType.InputType.TEXT, fieldName: 'serviceUsername', fieldLabel: 'Username', fieldContext: 'domain', displayOrder: 2,localCredential: true, required: true),
 				new OptionType(code: 'morpheus.servicePassword', name: 'Service Password', inputType: OptionType.InputType.PASSWORD, fieldName: 'servicePassword', fieldLabel: 'Password', fieldContext: 'domain', displayOrder: 3,localCredential: true, required: true),
 				new OptionType(code: 'morpheus.throttleRate', name: 'Throttle Rate', inputType: OptionType.InputType.NUMBER, defaultValue: 0, fieldName: 'serviceThrottleRate', fieldLabel: 'Throttle Rate', fieldContext: 'domain', displayOrder: 4),
-				new OptionType(code: 'morpheus.ignoreSsl', name: 'Ignore SSL', inputType: OptionType.InputType.CHECKBOX, defaultValue: 0, fieldName: 'ignoreSsl', fieldLabel: 'Disable SSL SNI Verification', fieldContext: 'domain', displayOrder: 5),
-				new OptionType(code: 'morpheus.inventoryExisting', name: 'Inventory Existing', inputType: OptionType.InputType.CHECKBOX, defaultValue: 0, fieldName: 'inventoryExisting', fieldLabel: 'Inventory Existing', fieldContext: 'config', displayOrder: 6)
+				new OptionType(code: 'morpheus.ignoreSsl', name: 'Ignore SSL', inputType: OptionType.InputType.CHECKBOX, defaultValue: false, fieldName: 'ignoreSsl', fieldLabel: 'Disable SSL SNI Verification', fieldContext: 'domain', displayOrder: 5),
+				new OptionType(code: 'morpheus.inventoryExisting', name: 'Inventory Existing', inputType: OptionType.InputType.CHECKBOX, defaultValue: false, fieldName: 'inventoryExisting', fieldLabel: 'Inventory Existing', fieldContext: 'config', displayOrder: 6)
 		]
 	}
 
 	@Override
 	Icon getIcon() {
-		return new Icon(path:"morpheus.png", darkPath: "morpheus-dark.png")
+		return new Icon(path:"morpheus.svg", darkPath: "morpheus-dark.svg")
 	}
 
     def login(HttpApiClient client, rpcConfig) {
         def rtn = [success:false]
         try {
-            HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL)
-            requestOptions.headers = ['content-type':'application/x-www-form-urlencoded','client_id':'morph-automation','grant_type':'password','scope':'write','accept':'application/json']
+            HttpApiClient.RequestOptions requestOptions = new HttpApiClient.RequestOptions(ignoreSSL: rpcConfig.ignoreSSL,contentType: 'form')
 
-            def username = URLEncoder.encode(rpcConfig.username, "UTF-8")
-            def password = URLEncoder.encode(rpcConfig.password, "UTF-8")
+            def username = rpcConfig.username.toString()
+            def password = rpcConfig.password.toString()
 
-            requestOptions.body = "username=${username}&password=${password}"
+            requestOptions.queryParams = ['client_id':'morph-automation','grant_type':'password','scope':'write']
+            requestOptions.headers = ['Content-Type':'application/x-www-form-urlencoded']
+
+            // requestOptions.body = "username=${username}&password=${password}"
+            requestOptions.body = ['username':username,'password':password]
 
             def apiUrl = cleanServiceUrl(rpcConfig.serviceUrl)
             def apiPath = getServicePath(rpcConfig.serviceUrl) + authPath
