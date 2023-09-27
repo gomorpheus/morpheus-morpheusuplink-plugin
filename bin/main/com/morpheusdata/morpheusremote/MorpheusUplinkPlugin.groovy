@@ -13,22 +13,22 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-package com.morpheusdata.morpheusremote
+package com.morpheusdata.morpheusuplink
 
 import com.morpheusdata.core.Plugin
 
-class MorpheusRemotePlugin extends Plugin {
+class MorpheusUplinkPlugin extends Plugin {
 
 	@Override
 	String getCode() {
-		return 'morpheus-morpheusremote-plugin'
+		return 'morpheus-morpheusuplink-plugin'
 	}
 
 	@Override
 	void initialize() {
-		MorpheusRemoteProvider morpheusRemoteProvider = new MorpheusRemoteProvider(this, morpheus)
-		this.pluginProviders.put("morpheusremote", morpheusRemoteProvider)
-		this.setName("Morpheus Remote")
+		MorpheusUplinkProvider morpheusUplinkProvider = new MorpheusUplinkProvider(this, morpheus)
+		this.pluginProviders.put("morpheusuplink", morpheusUplinkProvider)
+		this.setName("Morpheus Uplink")
 	}
 
 	/**

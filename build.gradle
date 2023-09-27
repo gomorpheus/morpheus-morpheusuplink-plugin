@@ -10,7 +10,7 @@ plugins {
 apply plugin: 'com.github.johnrengelman.shadow'
 apply plugin: 'com.bertramlabs.asset-pipeline'
 
-group = 'com.morpheusdata.morpheusremote'
+group = 'com.morpheusdata.morpheusuplink'
 sourceCompatibility = '1.11'
 targetCompatibility = '1.11'
 ext.isReleaseVersion = !version.endsWith("SNAPSHOT")
@@ -56,14 +56,14 @@ sourceSets {
 jar {
 	manifest {
 		attributes(
-				'Plugin-Class': 'com.morpheusdata.morpheusremote.MorpheusRemotePlugin',
+				'Plugin-Class': 'com.morpheusdata.morpheusuplink.MorpheusUplinkPlugin',
 				'Plugin-Version': version,
-				'Morpheus-Name': 'Morpheus Remote',
+				'Morpheus-Name': 'Morpheus Uplink',
 				'Morpheus-Organization': 'morpheus',
-				'Morpheus-Code': 'morpheusremote-plugin',
-				'Morpheus-Description': 'Plugin for Morpheus Remote IPAM',
-				'Morpheus-Logo': 'assets/morpheus.svg',
-				'Morpheus-Logo-Dark': 'assets/morpheus-dark.svg',
+				'Morpheus-Code': 'morpheusuplink-plugin',
+				'Morpheus-Description': 'Plugin for Morpheus Uplink IPAM',
+				'Morpheus-Logo': 'assets/morpheusuplink.svg',
+				'Morpheus-Logo-Dark': 'assets/morpheusuplink-dark.svg',
 				'Morpheus-Color': '#ffffff',
 				'Morpheus-Labels': 'Plugin, Networking, Network',
 				'Morpheus-Repo': 'https://github.com/gomorpheus/morpheus-morpheus-plugin',
