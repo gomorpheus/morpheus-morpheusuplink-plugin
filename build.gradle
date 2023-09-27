@@ -60,12 +60,12 @@ jar {
 				'Plugin-Version': version,
 				'Morpheus-Name': 'Morpheus Uplink',
 				'Morpheus-Organization': 'morpheus',
-				'Morpheus-Code': 'morpheusuplink-plugin',
-				'Morpheus-Description': 'Plugin for Morpheus Uplink IPAM',
+				'Morpheus-Code': 'morpheus-morpheusuplink-plugin',
+				'Morpheus-Description': 'Plugin for Morpheus Uplink',
 				'Morpheus-Logo': 'assets/morpheusuplink.svg',
 				'Morpheus-Logo-Dark': 'assets/morpheusuplink-dark.svg',
 				'Morpheus-Color': '#ffffff',
-				'Morpheus-Labels': 'Plugin, Networking, Network',
+				'Morpheus-Labels': 'plugin,networking,ipam,dns',
 				'Morpheus-Repo': 'https://github.com/gomorpheus/morpheus-morpheus-plugin',
 				'Morpheus-Min-Appliance-Version': minversion
 		)

@@ -1,6 +1,6 @@
-## Morphes Uplink
+## Morpheus Uplink
 
-This is the official Morpheus plugin for interacting with a uplink/parent Morpheus server.  Currently this plugin supports:
+This is the official Morpheus plugin for interacting with an Uplink/Parent Morpheus server.  Currently this plugin supports:
 
 * DNS
   * DNS Zones
