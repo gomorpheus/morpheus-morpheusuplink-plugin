@@ -1,13 +1,19 @@
-## Morphes Remote
+## Morphes Uplink
 
-This is the official Morpheus plugin for interacting with a remote/parent Morpheus DNS and IP Address Manager. This will automate functions with regards to IPAM services as well as DNS Services. This plugin syncs in configured subnets/pools, dns zones, dns resource records, and ip records for viewing directly in morpheus as well as manipulating when necessary. It also provides a way to attach a subnet/pool to a cloud network and automate the assignment and release of ipaddress resources for the workload being requested.
+This is the official Morpheus plugin for interacting with a uplink/parent Morpheus server.  Currently this plugin supports:
 
-Both IPv4 and IPv6 networks are enabled.
-
+* DNS
+  * DNS Zones
+  * Consumed DNS Records
+  * Creation of DNS Records
+* IPAM
+  * IP Pools
+  * Consumed IP Records
+  * Creation / Reservation of IPv4 and IPv6
 
 ### Configuring
 
-Once the plugin is loaded in the environment (`Administration -> Integrations -> Plugins` ). Morpheus Remote becomes available under `Infrastructure -> Network -> Services`.
+Once the plugin is loaded in the environment (`Administration -> Integrations -> Plugins` ). Morpheus Uplink becomes available under `Infrastructure -> Network -> Services`.
 
 When adding the integration simply enter the URL of the parent Morpheus API Endpoint (no path is needed just the root url) and the credentials with sufficient enough privileges to talk to the API.
 
