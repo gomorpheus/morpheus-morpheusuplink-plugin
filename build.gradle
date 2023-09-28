@@ -66,7 +66,7 @@ jar {
 				'Morpheus-Logo-Dark': 'assets/morpheusuplink-dark.svg',
 				'Morpheus-Color': '#ffffff',
 				'Morpheus-Labels': 'plugin,networking,ipam,dns',
-				'Morpheus-Repo': 'https://github.com/gomorpheus/morpheus-morpheus-plugin',
+				'Morpheus-Repo': 'https://github.com/gomorpheus/morpheus-morpheusuplink-plugin',
 				'Morpheus-Min-Appliance-Version': minversion
 		)
 	}

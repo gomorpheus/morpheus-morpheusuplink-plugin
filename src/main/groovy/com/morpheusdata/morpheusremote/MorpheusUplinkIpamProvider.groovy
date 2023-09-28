@@ -36,7 +36,7 @@ import io.reactivex.Observable
 import org.apache.commons.validator.routines.InetAddressValidator
 
 @Slf4j
-class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
+class MorpheusUplinkIpamProvider implements IPAMProvider, DNSProvider {
 	MorpheusContext morpheusContext
 	Plugin plugin
     static String authPath = 'oauth/token'
@@ -46,7 +46,7 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
 	static String LOCK_NAME = 'morpheusuplink.ipam'
 	private java.lang.Object maxResults
 
-	MorpheusUplinkProvider(Plugin plugin, MorpheusContext morpheusContext) {
+	MorpheusUplinkIpamProvider(Plugin plugin, MorpheusContext morpheusContext) {
 		this.morpheusContext = morpheusContext
 		this.plugin = plugin
 	}
