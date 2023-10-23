@@ -30,7 +30,7 @@ import groovy.util.logging.Slf4j
 import org.apache.commons.net.util.SubnetUtils
 import io.reactivex.rxjava3.core.Completable
 import io.reactivex.rxjava3.core.Single
-import io.reactivex.rxjava3.core.Scheduler
+import io.reactivex.rxjava3.schedulers.Schedulers
 import org.apache.http.entity.ContentType
 import io.reactivex.rxjava3.core.Observable
 import org.apache.commons.validator.routines.InetAddressValidator
@@ -215,9 +215,9 @@ class MorpheusUplinkIpamProvider implements IPAMProvider, DNSProvider {
                 token = tokenResults?.token as String
                 testResults = testNetworkPoolServer(morpheusUplinkClient,token,poolServer) as ServiceResponse<Map>
                     if(!testResults.success) {
-                        morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'error calling Micetro').blockingGet()
+                        morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'error calling Micetro').subscribe().dispose()
                     } else {
-                        morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.syncing).blockingGet()
+                        morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.syncing).subscribe().dispose()
                     }
                 } else {
                     morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'Morpheus api not reachable')
