@@ -1310,8 +1310,8 @@ class MorpheusUplinkIpamProvider implements IPAMProvider, DNSProvider {
 				new OptionType(code: 'morpheus.throttleRate', name: 'Throttle Rate', inputType: OptionType.InputType.NUMBER, defaultValue: 0, fieldName: 'serviceThrottleRate', fieldLabel: 'Throttle Rate', fieldContext: 'domain', displayOrder: 4),
 				new OptionType(code: 'morpheus.ignoreSsl', name: 'Ignore SSL', inputType: OptionType.InputType.CHECKBOX, defaultValue: false, fieldName: 'ignoreSsl', fieldLabel: 'Disable SSL SNI Verification', fieldContext: 'domain', displayOrder: 5),
 				new OptionType(code: 'morpheus.inventoryExisting', name: 'Inventory Existing', inputType: OptionType.InputType.CHECKBOX, defaultValue: false, fieldName: 'inventoryExisting', fieldLabel: 'Inventory Existing', fieldContext: 'config', displayOrder: 6),
-                new OptionType(code: 'morpheus.zoneFilter', name: 'Zone Filter', inputType: OptionType.InputType.TEXT, fieldName: 'zoneFilter', fieldLabel: 'Zone Filter', required: false, displayOrder: 7),
-                new OptionType(code: 'morpheus.networkFilter', name: 'Network Filter', inputType: OptionType.InputType.TEXT, fieldName: 'networkFilter', fieldLabel: 'Network Filter', required: false, displayOrder: 8),
+                new OptionType(code: 'morpheus.zoneFilter', name: 'Zone Filter', inputType: OptionType.InputType.TEXT, fieldName: 'zoneFilter', helpText: "A comma ',' delimited list of Zones to sync", fieldLabel: 'Zone Filter', required: false, displayOrder: 7),
+                new OptionType(code: 'morpheus.networkFilter', name: 'Network Filter', inputType: OptionType.InputType.TEXT, fieldName: 'networkFilter', helpText: "A comma ',' delimited list of Networks to sync", fieldLabel: 'Network Filter', required: false, displayOrder: 8),
 		]
 	}
 
