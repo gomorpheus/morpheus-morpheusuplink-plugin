@@ -28,15 +28,15 @@ import groovy.text.SimpleTemplateEngine
 import groovy.json.JsonOutput
 import groovy.util.logging.Slf4j
 import org.apache.commons.net.util.SubnetUtils
-import io.reactivex.Completable
-import io.reactivex.Single
-import io.reactivex.schedulers.Schedulers
+import io.reactivex.rxjava3.core.Completable
+import io.reactivex.rxjava3.core.Single
+import io.reactivex.rxjava3.schedulers.Schedulers
 import org.apache.http.entity.ContentType
-import io.reactivex.Observable
+import io.reactivex.rxjava3.core.Observable
 import org.apache.commons.validator.routines.InetAddressValidator
 
 @Slf4j
-class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
+class MorpheusUplinkIpamProvider implements IPAMProvider, DNSProvider {
 	MorpheusContext morpheusContext
 	Plugin plugin
     static String authPath = 'oauth/token'
@@ -46,7 +46,7 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
 	static String LOCK_NAME = 'morpheusuplink.ipam'
 	private java.lang.Object maxResults
 
-	MorpheusUplinkProvider(Plugin plugin, MorpheusContext morpheusContext) {
+	MorpheusUplinkIpamProvider(Plugin plugin, MorpheusContext morpheusContext) {
 		this.morpheusContext = morpheusContext
 		this.plugin = plugin
 	}
@@ -215,9 +215,9 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
                 token = tokenResults?.token as String
                 testResults = testNetworkPoolServer(morpheusUplinkClient,token,poolServer) as ServiceResponse<Map>
                     if(!testResults.success) {
-                        morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'error calling Micetro').blockingGet()
+                        morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'error calling Micetro').subscribe().dispose()
                     } else {
-                        morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.syncing).blockingGet()
+                        morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.syncing).subscribe().dispose()
                     }
                 } else {
                     morpheus.network.updateNetworkPoolServerStatus(poolServer, AccountIntegration.Status.error, 'Morpheus api not reachable')
@@ -254,6 +254,15 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
 
 		if(listResults.success && !listResults.error && listResults.data) {
 			List apiItems = listResults.data as List<Map>
+
+            // Filter apiItems by displayName
+            if (poolServer?.configMap?.networkFilter) {
+                def networkFilterList = poolServer.configMap.networkFilter.split(',')
+                apiItems = apiItems.findAll { item ->
+                    networkFilterList.contains(item.displayName)
+                }
+            }
+
 			Observable<NetworkPoolIdentityProjection> poolRecords = morpheus.network.pool.listIdentityProjections(poolServer.id)
 			SyncTask<NetworkPoolIdentityProjection,Map,NetworkPool> syncTask = new SyncTask(poolRecords, apiItems as Collection<Map>)
 			syncTask.addMatchFunction { NetworkPoolIdentityProjection domainObject, Map apiItem ->
@@ -288,6 +297,7 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
                 def id = it.id
                 def newNetworkPool
                 def name = it.name
+                def displayName = it?.displayName
                 def rangeConfig
                 def addRange
                 def cidr
@@ -296,7 +306,7 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
                 def addressCount
 
                 if(!it.type.code.contains('ipv6')) {
-                    def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${id}",
+                    def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, displayName:displayName, name:name, externalId:"${id}",
                                     type: poolType, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount:it.ipCount]
                     newNetworkPool = new NetworkPool(addConfig)
                     newNetworkPool.ipRanges = []
@@ -310,7 +320,7 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
                         newNetworkPool.ipRanges.add(addRange)
                     }
                 } else {
-                    def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, name:name, externalId:"${id}",
+                    def addConfig = [account:poolServer.account, poolServer:poolServer, owner:poolServer.account, displayName:displayName, name:name, externalId:"${id}",
                                     type: poolTypeIpv6, poolEnabled:true, parentType:'NetworkPoolServer', parentId:poolServer.id,ipCount:it.ipCount]
                     newNetworkPool = new NetworkPool(addConfig)
                     newNetworkPool.ipRanges = []
@@ -391,9 +401,19 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
 		try {
 			def listResults = listZones(client,token,poolServer, opts)
 
-			log.info("listZoneResults: {}", listResults)
+			log.debug("listZoneResults: {}", listResults)
 			if (listResults.success && listResults.data != null) {
 				List apiItems = listResults.data as List<Map>
+
+                // Filter apiItems by name
+                if (poolServer?.configMap?.zoneFilter) {
+                    def zoneFilterList = poolServer.configMap.zoneFilter.split(',')
+                    apiItems = apiItems.findAll { item ->
+                        def updateName = item.displayName ? "${item.name} (${item.displayName})" : item.name
+                        zoneFilterList.contains(updateName)
+                    }
+                }
+
 				Observable<NetworkDomainIdentityProjection> domainRecords = morpheus.network.domain.listIdentityProjections(poolServer.integration.id)
 
 				SyncTask<NetworkDomainIdentityProjection,Map,NetworkDomain> syncTask = new SyncTask(domainRecords, apiItems as Collection<Map>)
@@ -552,7 +572,7 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
 	}
 
     def cacheZoneRecords(HttpApiClient client,String token, NetworkPoolServer poolServer, Map opts) {
-		morpheus.network.domain.listIdentityProjections(poolServer.integration.id).flatMap {NetworkDomainIdentityProjection domain ->
+		morpheus.network.domain.listIdentityProjections(poolServer.integration.id).concatMap {NetworkDomainIdentityProjection domain ->
 			Completable.mergeArray(cacheZoneDomainRecords(client,token,poolServer,domain,'A',opts),
 				cacheZoneDomainRecords(client,token,poolServer, domain, 'AAAA', opts),
 				cacheZoneDomainRecords(client,token,poolServer, domain, 'PTR', opts),
@@ -562,7 +582,7 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
 			).toObservable().subscribeOn(Schedulers.io())
 		}.doOnError{ e ->
 			log.error("cacheZoneRecords error: ${e}", e)
-		}.subscribe()
+		}.blockingSubscribe()
 	}  
 
 	Completable cacheZoneDomainRecords(HttpApiClient client,String token, NetworkPoolServer poolServer, NetworkDomainIdentityProjection domain, String recordType, Map opts) {
@@ -570,7 +590,7 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
 		def listResults = listZoneRecords(client,token, poolServer, domain, recordType, opts)
 		log.debug("listResults: {}",listResults)
 		if(listResults.success) {
-			List<Map> apiItems = listResults.data as List<Map>
+			List<Map> apiItems = listResults.data as List<Map>            
 			Observable<NetworkDomainRecordIdentityProjection> domainRecords = morpheus.network.domain.record.listIdentityProjections(domain,recordType)
 			SyncTask<NetworkDomainRecordIdentityProjection,Map,NetworkDomainRecord> syncTask = new SyncTask(domainRecords, apiItems as Collection<Map>)
 			syncTask.addMatchFunction { NetworkDomainRecordIdentityProjection domainObject, Map apiItem ->
@@ -1080,9 +1100,9 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
 
 	// cacheIpAddressRecords
     void cacheIpAddressRecords(HttpApiClient client,String token, NetworkPoolServer poolServer, Map opts=[:]) {
-        morpheus.network.pool.listIdentityProjections(poolServer.id).buffer(50).flatMap { Collection<NetworkPoolIdentityProjection> poolIdents ->
+        morpheus.network.pool.listIdentityProjections(poolServer.id).buffer(50).concatMap { Collection<NetworkPoolIdentityProjection> poolIdents ->
             return morpheus.network.pool.listById(poolIdents.collect{it.id})
-        }.flatMap { NetworkPool pool ->
+        }.concatMap { NetworkPool pool ->
             def listResults = listHostRecords(client,token,poolServer,pool)
             if (listResults.success && !listResults.error && listResults.data) {
                 List<Map> apiItems = listResults.data
@@ -1112,7 +1132,7 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
             }
         }.doOnError{ e ->
             log.error("cacheIpRecords error: ${e}", e)
-        }.subscribe()
+        }.blockingSubscribe()
 
     }
 
@@ -1289,7 +1309,9 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
 				new OptionType(code: 'morpheus.servicePassword', name: 'Service Password', inputType: OptionType.InputType.PASSWORD, fieldName: 'servicePassword', fieldLabel: 'Password', fieldContext: 'domain', displayOrder: 3,localCredential: true, required: true),
 				new OptionType(code: 'morpheus.throttleRate', name: 'Throttle Rate', inputType: OptionType.InputType.NUMBER, defaultValue: 0, fieldName: 'serviceThrottleRate', fieldLabel: 'Throttle Rate', fieldContext: 'domain', displayOrder: 4),
 				new OptionType(code: 'morpheus.ignoreSsl', name: 'Ignore SSL', inputType: OptionType.InputType.CHECKBOX, defaultValue: false, fieldName: 'ignoreSsl', fieldLabel: 'Disable SSL SNI Verification', fieldContext: 'domain', displayOrder: 5),
-				new OptionType(code: 'morpheus.inventoryExisting', name: 'Inventory Existing', inputType: OptionType.InputType.CHECKBOX, defaultValue: false, fieldName: 'inventoryExisting', fieldLabel: 'Inventory Existing', fieldContext: 'config', displayOrder: 6)
+				new OptionType(code: 'morpheus.inventoryExisting', name: 'Inventory Existing', inputType: OptionType.InputType.CHECKBOX, defaultValue: false, fieldName: 'inventoryExisting', fieldLabel: 'Inventory Existing', fieldContext: 'config', displayOrder: 6),
+                new OptionType(code: 'morpheus.zoneFilter', name: 'Zone Filter', inputType: OptionType.InputType.TEXT, fieldName: 'zoneFilter', fieldLabel: 'Zone Filter', required: false, displayOrder: 7),
+                new OptionType(code: 'morpheus.networkFilter', name: 'Network Filter', inputType: OptionType.InputType.TEXT, fieldName: 'networkFilter', fieldLabel: 'Network Filter', required: false, displayOrder: 8),
 		]
 	}
 
@@ -1306,7 +1328,7 @@ class MorpheusUplinkProvider implements IPAMProvider, DNSProvider {
             def username = rpcConfig.username.toString()
             def password = rpcConfig.password.toString()
 
-            requestOptions.queryParams = ['client_id':'morph-automation','grant_type':'password','scope':'write']
+            requestOptions.queryParams = ['client_id':'morph-api','grant_type':'password','scope':'write']
             requestOptions.headers = ['Content-Type':'application/x-www-form-urlencoded']
 
             // requestOptions.body = "username=${username}&password=${password}"

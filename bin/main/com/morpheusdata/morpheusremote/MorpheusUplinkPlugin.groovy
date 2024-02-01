@@ -26,8 +26,8 @@ class MorpheusUplinkPlugin extends Plugin {
 
 	@Override
 	void initialize() {
-		MorpheusUplinkProvider morpheusUplinkProvider = new MorpheusUplinkProvider(this, morpheus)
-		this.pluginProviders.put("morpheusuplink", morpheusUplinkProvider)
+		MorpheusUplinkIpamProvider morpheusUplinkIpamProvider = new MorpheusUplinkIpamProvider(this, morpheus)
+		this.pluginProviders.put("morpheusuplink", morpheusUplinkIpamProvider)
 		this.setName("Morpheus Uplink")
 	}
 
