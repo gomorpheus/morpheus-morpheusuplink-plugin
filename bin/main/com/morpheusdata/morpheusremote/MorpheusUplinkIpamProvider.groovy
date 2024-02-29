@@ -163,7 +163,8 @@ class MorpheusUplinkIpamProvider implements IPAMProvider, DNSProvider {
 	}
 
 	ServiceResponse<NetworkPoolServer> initializeNetworkPoolServer(NetworkPoolServer poolServer, Map opts) {
-		log.info("initializeNetworkPoolServer: ${poolServer.dump()}")
+		log.info("initializeNetworkPoolServer {} with id {}", poolServer.name, poolServer.id)
+		log.debug("initializeNetworkPoolServer: ${poolServer.dump()}")
 		def rtn = new ServiceResponse()
         try {
             if(poolServer) {
@@ -591,7 +592,7 @@ class MorpheusUplinkIpamProvider implements IPAMProvider, DNSProvider {
 		def listResults = listZoneRecords(client,token, poolServer, domain, recordType, opts)
 		log.debug("listResults: {}",listResults)
 		if(listResults.success) {
-			List<Map> apiItems = listResults.data as List<Map>            
+			List<Map> apiItems = listResults.data as List<Map>
 			Observable<NetworkDomainRecordIdentityProjection> domainRecords = morpheus.network.domain.record.listIdentityProjections(domain,recordType)
 			SyncTask<NetworkDomainRecordIdentityProjection,Map,NetworkDomainRecord> syncTask = new SyncTask(domainRecords, apiItems as Collection<Map>)
 			syncTask.addMatchFunction { NetworkDomainRecordIdentityProjection domainObject, Map apiItem ->
