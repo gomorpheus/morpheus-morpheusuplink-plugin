@@ -1291,7 +1291,7 @@ class MorpheusUplinkIpamProvider implements IPAMProvider, DNSProvider {
 	 */
 	Collection<NetworkPoolType> getNetworkPoolTypes() {
 		return [
-			new NetworkPoolType(code:'morpheusuplink', name:'Morpheus Uplink', creatable:false, description:'Morpheus Uplink', rangeSupportsCidr: false),
+			new NetworkPoolType(code:'morpheusuplink', name:'Morpheus Uplink', creatable:false, description:'Morpheus Uplink', rangeSupportsCidr: false, loadBalancerCompatible: true, poolService: 'pluginNetworkPoolService'),
 			new NetworkPoolType(code:'morpheusuplinkipv6', name:'Morpheus Uplink IPv6', creatable:false, description:'Morpheus Uplink IPv6', rangeSupportsCidr: true, ipv6Pool:true)
 		]
 	}
